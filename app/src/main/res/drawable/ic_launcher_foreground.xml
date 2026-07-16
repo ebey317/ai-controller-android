@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive icon foreground: gamepad/AI glyph. Uses only vector path elements. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#38bdf8"
+    android:tintMode="multiply">
+    <group
+        android:translateX="14"
+        android:translateY="20"
+        android:scaleX="0.72"
+        android:scaleY="0.72">
+
+        <!-- Controller body -->
+        <path
+            android:fillColor="#38bdf8"
+            android:pathData="M20,8 L60,8 C74,8 86,20 86,34 C86,52 74,64 60,64 L20,64 C6,64 -6,52 -6,34 C-6,20 6,8 20,8 Z" />
+
+        <!-- Left stick (circle rendered as path) -->
+        <path
+            android:fillColor="#0f172a"
+            android:pathData="M18,27 A7,7 0 1,1 17.99,27 Z" />
+
+        <!-- Right stick -->
+        <path
+            android:fillColor="#0f172a"
+            android:pathData="M58,36 A6,6 0 1,1 57.99,36 Z" />
+
+        <!-- D-pad cross -->
+        <path
+            android:fillColor="#0f172a"
+            android:pathData="M8,30 L8,38 L12,38 L12,42 L20,42 L20,38 L24,38 L24,30 L20,30 L20,26 L12,26 L12,30 Z" />
+
+        <!-- ABXY buttons (small circles) -->
+        <path
+            android:fillColor="#0f172a"
+            android:pathData="M68,25 A3,3 0 1,1 67.99,25 Z" />
+        <path
+            android:fillColor="#0f172a"
+            android:pathData="M74,31 A3,3 0 1,1 73.99,31 Z" />
+        <path
+            android:fillColor="#0f172a"
+            android:pathData="M62,31 A3,3 0 1,1 61.99,31 Z" />
+        <path
+            android:fillColor="#0f172a"
+            android:pathData="M68,37 A3,3 0 1,1 67.99,37 Z" />
+
+    </group>
+</vector>

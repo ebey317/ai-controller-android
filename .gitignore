@@ -1,0 +1,17 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+/app/release
+*.apk
+*.aab
+
+# Local secret — never commit; copy groq_api_key.xml.example and fill in your own key
+app/src/main/res/values/groq_api_key.xml

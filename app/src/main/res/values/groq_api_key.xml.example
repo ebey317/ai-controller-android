@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Groq API key for on-device speech-to-text. Override this file in your local build
+  or keep it empty and the voice feature will log "API key not configured".
+-->
+<resources>
+    <string name="groq_api_key" translatable="false">YOUR_GROQ_API_KEY</string>
+</resources>

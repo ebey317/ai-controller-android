@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI Controller</string>
+    <string name="settings_title">Button Mappings</string>
+    <string name="accessibility_service_label">AI Controller Input Mapper</string>
+    <string name="accessibility_service_description">Maps Xbox controller input (buttons, sticks, triggers) to touch, gestures, and system navigation, driven entirely on-device.</string>
+
+    <string name="label_service_status">Accessibility Service</string>
+    <string name="status_enabled">Enabled</string>
+    <string name="status_disabled">Disabled — tap to open Accessibility Settings</string>
+    <string name="action_enable_service">Open Accessibility Settings</string>
+
+    <string name="label_cursor_toggle">Show virtual cursor</string>
+    <string name="label_start_on_boot">Start on boot</string>
+    <string name="label_sensitivity">Cursor sensitivity</string>
+    <string name="label_deadzone">Stick deadzone</string>
+    <string name="label_invert_scroll">Invert scroll direction</string>
+
+    <string name="action_open_button_mappings">Edit Button Mappings</string>
+    <string name="action_reset_defaults">Reset to Defaults</string>
+    <string name="action_change">Change</string>
+    <string name="mapping_dialog_title">Choose an action</string>
+
+    <string name="mapping_reset_confirm_title">Reset all mappings?</string>
+    <string name="mapping_reset_confirm_message">This restores the default button, stick, and trigger mapping. Custom bindings will be lost.</string>
+    <string name="action_confirm">Reset</string>
+    <string name="action_cancel">Cancel</string>
+
+    <string name="voice_trigger_hint">Voice dictation (Groq Whisper)</string>
+    <string name="action_test_keyboard">Test Keyboard</string>
+    <string name="action_start_service">Start Service</string>
+    <string name="action_stop_service">Stop Service</string>
+    <string name="label_service_toggle">Controller input</string>
+    <string name="toast_mic_permission_needed">Microphone permission needed for voice dictation</string>
+    <string name="toast_service_started">Service started</string>
+    <string name="toast_service_stopped">Service stopped</string>
+</resources>
