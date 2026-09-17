@@ -33,12 +33,18 @@ companion device — everything routes through public
 
 1. Open this directory in Android Studio, or build from the CLI:
    ```
-   cp docs/groq_api_key.xml.example app/src/main/res/values/groq_api_key.xml
-   # edit that file and paste your real Groq API key
    ./gradlew assembleDebug
    ```
+   This builds with the placeholder Groq key (`YOUR_GROQ_API_KEY`) baked into
+   the resource — voice dictation stays disabled until you enter a real key
+   at runtime in step 2. **Do not** paste a real key into
+   `app/src/main/res/values/groq_api_key.xml` (or a `groq_api_key.xml`
+   override): any value placed in that resource is compiled directly into
+   the APK and ships inside it with any distributed build.
 2. Install the APK, open **AI Controller**, and accept (or decline) the
-   voice-dictation consent dialog.
+   voice-dictation consent dialog. Enter your Groq API key in the **Groq API
+   key** field and tap **Save Key** — this stores it in the app's own private
+   on-device storage, never in the build.
 3. Tap **Open Accessibility Settings** and enable "AI Controller Input
    Mapper".
 4. Connect an Xbox-style gamepad (Bluetooth or USB-C) and toggle **Controller
@@ -86,5 +92,14 @@ companion device — everything routes through public
 ./gradlew assembleDebug        # build an installable APK
 ```
 
-Requires the Android SDK (compileSdk 35, minSdk 26) and a
-`app/src/main/res/values/groq_api_key.xml` (gitignored — see above).
+Requires the Android SDK (compileSdk 35, minSdk 26). No `groq_api_key.xml`
+edit is needed or recommended — enter the Groq key at runtime instead (see
+Install, above).
+
+## Known limitations
+
+**Custom keyboard is a full-screen activity, not a floating IME.**
+`KeyboardActivity` opens as a regular activity and takes focus away from the
+field you were dictating into, rather than overlaying it like a real input
+method. A floating IME/accessibility-overlay keyboard is architecturally the
+right fix but is a larger redesign than this pass covers.

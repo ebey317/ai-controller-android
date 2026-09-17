@@ -157,6 +157,17 @@ class MainActivity : AppCompatActivity() {
             setServiceActivePref(checked)
         }
 
+        binding.editGroqApiKey.setText(GroqKeyStore.load(this).orEmpty())
+        binding.buttonSaveGroqKey.setOnClickListener {
+            val key = binding.editGroqApiKey.text?.toString().orEmpty()
+            if (key.isBlank()) {
+                showToast(getString(R.string.toast_groq_key_empty))
+            } else {
+                GroqKeyStore.save(this, key)
+                showToast(getString(R.string.toast_groq_key_saved))
+            }
+        }
+
         binding.buttonTestKeyboard.setOnClickListener {
             binding.editTestInput.requestFocus()
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager

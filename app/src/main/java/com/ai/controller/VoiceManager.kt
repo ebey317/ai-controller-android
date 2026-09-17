@@ -34,8 +34,11 @@ class VoiceManager(context: Context) {
             ready = status == TextToSpeech.SUCCESS
             if (ready) {
                 applyActivePack()
+                // QUEUE_ADD, not the live-call QUEUE_FLUSH default — draining the
+                // backlog must preserve order instead of each item flushing (and
+                // discarding) the ones queued before it.
                 while (pendingUtterances.isNotEmpty()) {
-                    speakInternal(pendingUtterances.removeFirst())
+                    speakInternal(pendingUtterances.removeFirst(), TextToSpeech.QUEUE_ADD)
                 }
             } else {
                 Log.w(TAG, "TextToSpeech engine failed to initialize (status=$status)")
@@ -77,8 +80,8 @@ class VoiceManager(context: Context) {
         tts?.stop()
     }
 
-    private fun speakInternal(text: String) {
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ai_controller_${System.currentTimeMillis()}")
+    private fun speakInternal(text: String, queueMode: Int = TextToSpeech.QUEUE_FLUSH) {
+        tts?.speak(text, queueMode, null, "ai_controller_${System.currentTimeMillis()}")
     }
 
     private fun applyActivePack() {

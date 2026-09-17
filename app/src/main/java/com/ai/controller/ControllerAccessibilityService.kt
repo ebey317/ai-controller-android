@@ -365,6 +365,12 @@ class ControllerAccessibilityService : AccessibilityService() {
             } finally {
                 try { recorder.stop() } catch (e: IllegalStateException) { /* never started recording */ }
                 recorder.release()
+                // Identity check: only clear the field if it still points at THIS
+                // recorder. A newer startVoiceRecording() may already have replaced
+                // it with a fresh instance by the time this finally block runs —
+                // clearing unconditionally would null out (and, via stop's release
+                // calls, double-release) that newer recorder out from under it.
+                if (audioRecord === recorder) audioRecord = null
             }
 
             withContext(Dispatchers.Main) { showVoiceToast(false) }
@@ -384,9 +390,12 @@ class ControllerAccessibilityService : AccessibilityService() {
         isRecording = false // signals the read loop to exit its while-condition normally
         if (cancel) {
             voiceRecordJob?.cancel()
+            // Only stop() here — never release()/null the field. The recording
+            // coroutine's own finally block owns releasing its local recorder
+            // reference and clears the field itself (with an identity check), so
+            // a newer startVoiceRecording() can never have its recorder released
+            // or its field reference clobbered by this stop path (F1).
             try { audioRecord?.stop() } catch (e: IllegalStateException) { /* not recording */ }
-            audioRecord?.release()
-            audioRecord = null
             showVoiceToast(false)
         }
     }
@@ -397,9 +406,9 @@ class ControllerAccessibilityService : AccessibilityService() {
         voiceRecordCancelled = true
         voiceRecordJob?.cancel()
         voiceRecordJob = null
+        // See stopVoiceRecording(cancel=true): stop() only, release/clear is the
+        // recording coroutine's own responsibility via its finally block.
         try { audioRecord?.stop() } catch (e: IllegalStateException) { /* not recording */ }
-        audioRecord?.release()
-        audioRecord = null
     }
 
     private suspend fun processRecording(pcmBytes: ByteArray, sampleRate: Int) {
@@ -475,9 +484,12 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     private fun transcribeWithGroq(file: File): String {
-        val apiKey = getString(R.string.groq_api_key)
+        // Runtime-entered key (MainActivity's Groq API key field) takes priority
+        // over the build resource — F7: entering it at runtime, instead of baking
+        // it into groq_api_key.xml, keeps it out of any distributed APK.
+        val apiKey = GroqKeyStore.load(this) ?: getString(R.string.groq_api_key)
         if (apiKey.isBlank() || apiKey == "YOUR_GROQ_API_KEY") {
-            throw IllegalStateException("Groq API key not configured in groq_api_key.xml")
+            throw IllegalStateException("Groq API key not configured — set it in AI Controller settings")
         }
         val boundary = "Boundary-${System.currentTimeMillis()}"
         val lineEnd = "\r\n"

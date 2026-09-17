@@ -44,12 +44,15 @@ class DriftCalibrator {
                     resetHistory()
                 }
             }
-            magnitude > REST_MAX -> {
-                // Stick is being actively used — drop any partial history so an
-                // in-motion sample is never mistaken for rest drift.
+            else -> {
+                // Either magnitude > REST_MAX (actively in motion) or
+                // magnitude < REST_MIN (true zero) — either way this sample isn't
+                // part of a near-rest window, so drop any partial history. Without
+                // this, a magnitude < REST_MIN sample used to fall through and
+                // leave stale accumulated sums in place, letting the next
+                // near-rest window mix in samples from before the stick moved.
                 resetHistory()
             }
-            // magnitude < REST_MIN: true zero, nothing to learn from either way.
         }
     }
 

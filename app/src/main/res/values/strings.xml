@@ -28,6 +28,11 @@
     <string name="action_cancel">Cancel</string>
 
     <string name="voice_trigger_hint">Voice dictation (Groq Whisper)</string>
+    <string name="label_groq_api_key">Groq API key</string>
+    <string name="hint_groq_api_key">Paste your Groq API key (stored on-device only)</string>
+    <string name="action_save_groq_key">Save Key</string>
+    <string name="toast_groq_key_saved">Groq API key saved</string>
+    <string name="toast_groq_key_empty">Enter a Groq API key first</string>
     <string name="action_test_keyboard">Test Keyboard</string>
     <string name="action_start_service">Start Service</string>
     <string name="action_stop_service">Stop Service</string>
@@ -50,9 +55,16 @@
     <string name="keyboard_pin_empty_clipboard">Clipboard is empty, nothing to pin</string>
 
     <!--
-        Groq API key for on-device speech-to-text. Override via gradle flavor or
-        by editing this string. Empty (the default) disables voice dictation;
-        see ControllerAccessibilityService.transcribeWithGroq for the guard.
+        Placeholder build-time fallback only — do NOT put a real Groq API key
+        here. Any key placed in this resource (or in the gitignored
+        groq_api_key.xml override) is compiled directly into the APK and ships
+        inside any distributed build, where it can be extracted by anyone with
+        the APK. This resource must stay a compile-time contract (R.string.
+        groq_api_key) so the app builds; transcribeWithGroq's guard refuses this
+        exact placeholder value. The safe path is entering the key at runtime in
+        the app's Groq API key field (MainActivity), which GroqKeyStore persists
+        to this app's own private on-device storage and which
+        transcribeWithGroq checks before ever reading this resource.
     -->
     <string name="groq_api_key" translatable="false">YOUR_GROQ_API_KEY</string>
 </resources>
