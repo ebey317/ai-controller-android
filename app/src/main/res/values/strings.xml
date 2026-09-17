@@ -47,4 +47,11 @@
     <string name="keyboard_pin_add">+ pin</string>
     <string name="keyboard_pin_full">Pin slots full — remove one first (long-press to unpin)</string>
     <string name="keyboard_pin_empty_clipboard">Clipboard is empty, nothing to pin</string>
+
+    <!--
+        Groq API key for on-device speech-to-text. Override via gradle flavor or
+        by editing this string. Empty (the default) disables voice dictation;
+        see ControllerAccessibilityService.transcribeWithGroq for the guard.
+    -->
+    <string name="groq_api_key" translatable="false">YOUR_GROQ_API_KEY</string>
 </resources>
