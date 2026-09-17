@@ -38,6 +38,12 @@
             android:label="@string/settings_title"
             android:parentActivityName=".MainActivity" />
 
+        <activity
+            android:name=".ui.KeyboardActivity"
+            android:exported="false"
+            android:label="@string/keyboard_title"
+            android:parentActivityName=".MainActivity" />
+
         <service
             android:name=".ControllerAccessibilityService"
             android:exported="true"

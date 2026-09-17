@@ -15,6 +15,7 @@ enum class ActionType {
     VOICE_TRIGGER,
     SHOW_KEYBOARD,
     FOCUS_NEXT,
+    CYCLE_CONTEXT,
     NONE
 }
 
@@ -45,6 +46,7 @@ data class ButtonAction(
         fun showKeyboard() = ButtonAction(ActionType.SHOW_KEYBOARD)
         fun focusNext() = ButtonAction(ActionType.FOCUS_NEXT)
         fun voiceTrigger() = ButtonAction(ActionType.VOICE_TRIGGER)
+        fun cycleContext() = ButtonAction(ActionType.CYCLE_CONTEXT)
         fun none() = ButtonAction(ActionType.NONE)
     }
 }

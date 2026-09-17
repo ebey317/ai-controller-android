@@ -15,6 +15,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.ai.controller.databinding.ActivityMainBinding
 import com.ai.controller.ui.SettingsActivity
+import com.ai.controller.ui.KeyboardActivity
 
 private const val RC_RECORD_AUDIO = 1001
 private const val PREFS_MAIN = "main"
@@ -40,11 +41,35 @@ class MainActivity : AppCompatActivity() {
         profile = profileManager.loadProfile()
 
         bindControls()
+        maybeShowConsentDialog()
     }
 
     override fun onResume() {
         super.onResume()
         refreshServiceStatus()
+    }
+
+    /**
+     * A4: consent gate. Voice dictation sends microphone audio off-device to
+     * the Groq Whisper API — nothing may reach Groq until the user has seen
+     * and explicitly accepted that (see PRIVACY.md). This is shown once, on
+     * first launch or any time consent hasn't been granted yet; the flag is
+     * read by ControllerAccessibilityService before every recording.
+     */
+    private fun maybeShowConsentDialog() {
+        if (ConsentManager.isGranted(this)) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.consent_dialog_title)
+            .setMessage(R.string.consent_dialog_message)
+            .setCancelable(false)
+            .setPositiveButton(R.string.consent_dialog_accept) { _, _ ->
+                ConsentManager.setGranted(this, true)
+            }
+            .setNegativeButton(R.string.consent_dialog_decline) { _, _ ->
+                ConsentManager.setGranted(this, false)
+                showToast(getString(R.string.toast_consent_declined))
+            }
+            .show()
     }
 
     private fun bindControls() {
@@ -115,6 +140,10 @@ class MainActivity : AppCompatActivity() {
             binding.editTestInput.requestFocus()
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
             imm.showSoftInput(binding.editTestInput, InputMethodManager.SHOW_IMPLICIT)
+        }
+
+        binding.buttonOpenCustomKeyboard.setOnClickListener {
+            startActivity(Intent(this, KeyboardActivity::class.java))
         }
     }
 

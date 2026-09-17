@@ -4,7 +4,6 @@ import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Path
@@ -13,7 +12,6 @@ import android.graphics.PointF
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -35,8 +33,11 @@ import com.ai.controller.models.ControllerProfile
 import com.ai.controller.models.SwipeDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -46,13 +47,12 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
  * Core AccessibilityService: reads Xbox-style gamepad input (buttons via
  * onKeyEvent, sticks/triggers via a focused joystick-capture overlay) and
- * turns it into touch gestures, global actions, and cursor movement.
+ * turns it into touch gestures, global actions, cursor movement, and
+ * push-to-talk voice dictation.
  *
  * No root, ADB, or companion device required — everything routes through
  * public AccessibilityService + WindowManager APIs.
@@ -61,37 +61,73 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     private val inputMapper = InputMapper()
     private lateinit var profileManager: ProfileManager
+    private lateinit var contextSwitcher: ContextSwitcher
     private lateinit var cursorOverlay: CursorOverlay
+    private lateinit var legendOverlay: LegendOverlay
+    private lateinit var voiceManager: VoiceManager
     private lateinit var windowManager: WindowManager
     private var profile: ControllerProfile = ControllerProfile.default()
+    private val driftCalibrator = DriftCalibrator()
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private var motionCaptureView: MotionCaptureView? = null
-    private val activeTriggerRunnables = mutableMapOf<ControllerInput, Runnable>()
+    private val activeTriggerJobs = mutableMapOf<ControllerInput, Job>()
+    private val triggerHeldState = mutableMapOf<ControllerInput, Boolean>()
     private var lastStickScrollTimeMs = 0L
+
+    // Lifecycle-scoped: every coroutine this service launches (trigger repeats,
+    // legend tick, voice recording, the focus watchdog) is a child of this scope
+    // and dies with it in onDestroy — fixes A5 (trigger runnables leaking across
+    // service destroy).
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    private var voiceBridgeServer: VoiceBridgeServer? = null
+    private var legendTickJob: Job? = null
+    private var focusWatchdogJob: Job? = null
+
+    // Push-to-talk state — A2: coroutine-driven recording with a sized AudioRecord
+    // buffer and real cancellation, instead of a raw busy-read Thread.
+    private lateinit var pttController: PttController
     private var audioRecord: AudioRecord? = null
-    private var recordingThread: Thread? = null
+    private var voiceRecordJob: Job? = null
     @Volatile private var isRecording = false
-    private val pcmBuffer = ByteArrayOutputStream()
+    @Volatile private var voiceRecordCancelled = false
+    private var recordStartElapsedMs = 0L
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-        profile = profileManager.loadProfile()
-        if (profile.cursorEnabled) cursorOverlay.show() else cursorOverlay.hide()
+        reloadActiveProfile()
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         profileManager = ProfileManager(this)
-        profile = profileManager.loadProfile()
+        contextSwitcher = ContextSwitcher(this)
+        voiceManager = VoiceManager(this)
+        profile = contextSwitcher.profileFor(contextSwitcher.activeContext(), profileManager)
 
         cursorOverlay = CursorOverlay(this)
-        if (profile.cursorEnabled) cursorOverlay.show()
+        legendOverlay = LegendOverlay(this)
+        if (profile.cursorEnabled) {
+            cursorOverlay.show()
+            legendOverlay.show()
+        }
+
+        pttController = PttController(
+            onStart = { startVoiceRecording() },
+            onStop = { stopVoiceRecording(cancel = false) },
+            onCancel = { stopVoiceRecording(cancel = true) }
+        )
 
         attachMotionCapture()
+        startFocusWatchdog()
+        startLegendTick()
         registerPrefsListener()
+
+        voiceBridgeServer = VoiceBridgeServer(
+            onTranscribeOnly = { audioBytes -> transcribeBytesIfConsented(audioBytes) },
+            onSpeak = { text -> voiceManager.speak(text) }
+        ).also { it.start() }
+
         instance = this
         Log.i(TAG, "ControllerAccessibilityService connected")
     }
@@ -108,11 +144,21 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     private fun teardown() {
         unregisterPrefsListener()
-        cancelAllTriggerRunnables()
+        cancelAllTriggerJobs()
         detachMotionCapture()
-        stopVoiceRecording()
+        hardStopVoiceRecording()
+        pttController.reset()
+        voiceBridgeServer?.stop()
+        voiceBridgeServer = null
+        if (::voiceManager.isInitialized) voiceManager.shutdown()
+        legendTickJob?.cancel()
+        focusWatchdogJob?.cancel()
+        // Cancels every remaining child coroutine (trigger jobs, legend tick,
+        // focus watchdog, any in-flight voice job) in one place — the actual
+        // fix for A5, everything above is defense in depth for early bail-outs.
         serviceScope.cancel()
         if (::cursorOverlay.isInitialized) cursorOverlay.hide()
+        if (::legendOverlay.isInitialized) legendOverlay.hide()
         if (instance === this) instance = null
     }
 
@@ -132,14 +178,27 @@ class ControllerAccessibilityService : AccessibilityService() {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return super.onKeyEvent(event)
         if (event.repeatCount > 0) return true // swallow OS auto-repeat; we drive our own timing
 
-        if (event.action == KeyEvent.ACTION_DOWN) {
-            handleButtonDown(input)
+        val action = inputMapper.resolveAction(profile, input)
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (action.type == ActionType.VOICE_TRIGGER) {
+                    pttController.onButtonDown()
+                } else {
+                    handleButtonDown(input, action)
+                }
+            }
+            KeyEvent.ACTION_UP -> {
+                // Only voice-trigger cares about release; every other action already
+                // fired on ACTION_DOWN above, matching the original tap-on-press model.
+                if (action.type == ActionType.VOICE_TRIGGER) {
+                    pttController.onButtonUp()
+                }
+            }
         }
         return true
     }
 
-    private fun handleButtonDown(input: ControllerInput) {
-        val action = inputMapper.resolveAction(profile, input)
+    private fun handleButtonDown(input: ControllerInput, action: ButtonAction = inputMapper.resolveAction(profile, input)) {
         val cursor = cursorOverlay.getPosition()
 
         when (action.type) {
@@ -151,9 +210,10 @@ class ControllerAccessibilityService : AccessibilityService() {
             ActionType.SCROLL -> action.swipeDirection?.let { dispatchScroll(cursor, it) }
             ActionType.SWIPE -> action.swipeDirection?.let { dispatchSwipe(cursor, it, action.durationMs) }
             ActionType.KEY_EVENT -> handleKeyEventAction(action)
-            ActionType.VOICE_TRIGGER -> triggerVoiceDictation()
+            ActionType.VOICE_TRIGGER -> Unit // handled by PttController edges, not a single-shot tap
             ActionType.SHOW_KEYBOARD -> setSoftKeyboardMode(true)
             ActionType.FOCUS_NEXT -> moveAccessibilityFocus(true)
+            ActionType.CYCLE_CONTEXT -> cycleContext()
             ActionType.NONE -> Unit
         }
     }
@@ -191,15 +251,58 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Profile contexts (desktop / browser / iptv) — ContextSwitcher
+    // ---------------------------------------------------------------------
+
+    private fun cycleContext() {
+        val next = contextSwitcher.cycleContext()
+        reloadActiveProfile()
+        Toast.makeText(applicationContext, "Context: ${next.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
+        voiceManager.speak("${next} mode")
+    }
+
+    private fun reloadActiveProfile() {
+        profile = contextSwitcher.profileFor(contextSwitcher.activeContext(), profileManager)
+        if (profile.cursorEnabled) {
+            cursorOverlay.show()
+            legendOverlay.show()
+        } else {
+            cursorOverlay.hide()
+            legendOverlay.hide()
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Voice dictation — push-to-talk via PttController, Groq Whisper STT
+    // ---------------------------------------------------------------------
+
+    /** A4: gate every path into Groq behind explicit, persisted user consent. */
+    private fun consentGranted(): Boolean = ConsentManager.isGranted(this)
+
     private fun startVoiceRecording() {
+        if (isRecording) return // debounce reentry; PttController already guards this too
+        if (!consentGranted()) {
+            Toast.makeText(
+                applicationContext,
+                "Voice dictation needs consent — open AI Controller to allow microphone use.",
+                Toast.LENGTH_LONG
+            ).show()
+            pttController.reset()
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            pttController.reset()
+            return
+        }
+
         val sampleRate = 16000
         val channelConfig = AudioFormat.CHANNEL_IN_MONO
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
         val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-            .coerceAtLeast(sampleRate * 2) // at least 1 second
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) return
+            .coerceAtLeast(sampleRate * 2) // at least 1 second, sized chunk buffer (A2)
 
         val recorder = AudioRecord(
             MediaRecorder.AudioSource.MIC,
@@ -210,47 +313,105 @@ class ControllerAccessibilityService : AccessibilityService() {
         )
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             Log.e(TAG, "AudioRecord failed to initialize")
+            recorder.release()
+            pttController.reset()
             return
         }
+
         audioRecord = recorder
-        pcmBuffer.reset()
         isRecording = true
+        voiceRecordCancelled = false
+        recordStartElapsedMs = SystemClock.elapsedRealtime()
         recorder.startRecording()
         showVoiceToast(true)
 
-        recordingThread = Thread({
-            val buffer = ByteArray(minBuffer)
-            while (isRecording) {
-                val read = recorder.read(buffer, 0, buffer.size)
-                if (read > 0) pcmBuffer.write(buffer, 0, read)
+        // Coroutine instead of a raw Thread: cancellable via Job.cancel(), tied to
+        // the service's own lifecycle scope, no separate busy-poll flag to leak.
+        voiceRecordJob = serviceScope.launch(Dispatchers.IO) {
+            val pcmBuffer = ByteArrayOutputStream()
+            val chunk = ByteArray(minBuffer) // sized buffer — bounded per-read chunking, not one giant read
+            try {
+                while (isRecording && isActive) {
+                    val read = recorder.read(chunk, 0, chunk.size)
+                    if (read > 0) pcmBuffer.write(chunk, 0, read)
+                    if (SystemClock.elapsedRealtime() - recordStartElapsedMs > MAX_RECORDING_MS) {
+                        // Long-press safety net: a stuck/forgotten trigger must never
+                        // record forever. Auto-cancel — no STT, no injected text — same
+                        // "never leave a live capture" contract as the desktop's
+                        // _kill_recorder, just expressed as a duration cap instead of a
+                        // debounce window.
+                        Log.w(TAG, "Voice recording exceeded ${MAX_RECORDING_MS}ms — auto-cancelling")
+                        voiceRecordCancelled = true
+                        isRecording = false
+                    }
+                }
+            } finally {
+                try { recorder.stop() } catch (e: IllegalStateException) { /* never started recording */ }
+                recorder.release()
             }
-            recorder.stop()
-            recorder.release()
-        }, "VoiceRecordingThread").apply { start() }
+
+            withContext(Dispatchers.Main) { showVoiceToast(false) }
+
+            if (!voiceRecordCancelled && isActive) {
+                val pcmBytes = pcmBuffer.toByteArray()
+                if (pcmBytes.isNotEmpty()) processRecording(pcmBytes, sampleRate)
+            }
+        }
     }
 
-    private fun stopVoiceRecording() {
-        if (!isRecording) return
+    /** [cancel]=true is the PTT-release-into-cancel / long-press-timeout path: the
+     * Job is cancelled outright (A2) so no STT call and no text ever lands. */
+    private fun stopVoiceRecording(cancel: Boolean) {
+        if (!isRecording && voiceRecordJob?.isActive != true) return
+        voiceRecordCancelled = cancel
+        isRecording = false // signals the read loop to exit its while-condition normally
+        if (cancel) {
+            voiceRecordJob?.cancel()
+            try { audioRecord?.stop() } catch (e: IllegalStateException) { /* not recording */ }
+            audioRecord?.release()
+            audioRecord = null
+            showVoiceToast(false)
+        }
+    }
+
+    /** Used only from teardown: unconditionally drop any in-flight recording. */
+    private fun hardStopVoiceRecording() {
         isRecording = false
-        recordingThread?.join(1000)
-        recordingThread = null
+        voiceRecordCancelled = true
+        voiceRecordJob?.cancel()
+        voiceRecordJob = null
+        try { audioRecord?.stop() } catch (e: IllegalStateException) { /* not recording */ }
+        audioRecord?.release()
         audioRecord = null
-        showVoiceToast(false)
+    }
 
-        val pcmBytes = pcmBuffer.toByteArray()
-        if (pcmBytes.isEmpty()) return
-
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val wavFile = writeWavToCache(pcmBytes, 16000)
-                val transcript = transcribeWithGroq(wavFile)
-                wavFile.delete()
-                if (transcript.isNotBlank()) {
-                    withContext(Dispatchers.Main) { injectText(transcript) }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Voice transcription failed", e)
+    private suspend fun processRecording(pcmBytes: ByteArray, sampleRate: Int) {
+        try {
+            val wavFile = writeWavToCache(pcmBytes, sampleRate)
+            val rawTranscript = transcribeWithGroq(wavFile)
+            wavFile.delete()
+            if (rawTranscript.isNotBlank()) {
+                val mode = PttModeStore.load(applicationContext)
+                val styled = TextStyles.transform(rawTranscript, mode)
+                withContext(Dispatchers.Main) { injectText(styled) }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Voice transcription failed", e)
+        }
+    }
+
+    /** Used by [VoiceBridgeServer]'s /voice route — same consent gate as the PTT path. */
+    private suspend fun transcribeBytesIfConsented(wavBytes: ByteArray): String {
+        if (!consentGranted()) return ""
+        return try {
+            val tmp = File(cacheDir, "bridge_voice_${System.currentTimeMillis()}.wav")
+            FileOutputStream(tmp).use { it.write(wavBytes) }
+            val text = transcribeWithGroq(tmp)
+            tmp.delete()
+            text
+        } catch (e: Exception) {
+            Log.e(TAG, "voice bridge transcription failed", e)
+            ""
         }
     }
 
@@ -335,6 +496,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         return json.optString("text", "").trim()
     }
 
+    /** Replaces the focused field's text — used for whole-utterance dictation drops. */
     private fun injectText(text: String) {
         try {
             val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
@@ -350,9 +512,48 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun triggerVoiceDictation() {
-        if (isRecording) stopVoiceRecording() else startVoiceRecording()
+    /** Appends one key's worth of text to whatever is focused — used by KeyboardActivity,
+     * which types incrementally rather than dropping a whole utterance at once. */
+    fun typeCharacter(ch: String) {
+        try {
+            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val current = focused.text?.toString().orEmpty()
+            injectFocusedText(focused, current + ch)
+        } catch (e: Exception) {
+            Log.e(TAG, "typeCharacter failed", e)
+        }
     }
+
+    /** Appends a whole string in one accessibility call — used by KeyboardActivity's
+     * pinned-snippet buttons, so a multi-word pin doesn't cost one call per character. */
+    fun typeText(text: String) {
+        try {
+            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val current = focused.text?.toString().orEmpty()
+            injectFocusedText(focused, current + text)
+        } catch (e: Exception) {
+            Log.e(TAG, "typeText failed", e)
+        }
+    }
+
+    /** Removes the last character of the focused field's text — KeyboardActivity's backspace. */
+    fun backspaceOnce() {
+        try {
+            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val current = focused.text?.toString().orEmpty()
+            if (current.isEmpty()) return
+            injectFocusedText(focused, current.dropLast(1))
+        } catch (e: Exception) {
+            Log.e(TAG, "backspaceOnce failed", e)
+        }
+    }
+
+    private fun injectFocusedText(node: AccessibilityNodeInfo, text: String) {
+        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    // ---------------------------------------------------------------------
     // Sticks + triggers (joystick motion, captured via a focused overlay)
     // ---------------------------------------------------------------------
 
@@ -385,12 +586,55 @@ class ControllerAccessibilityService : AccessibilityService() {
         motionCaptureView = null
     }
 
+    /**
+     * A3 fix: joystick MotionEvents (SOURCE_CLASS_JOYSTICK) are routed to
+     * whatever window currently holds input focus — unlike touch events,
+     * there is no hit-testing fallback. This 1x1 overlay must therefore stay
+     * genuinely focusable (FLAG_NOT_FOCUSABLE would make it permanently deaf
+     * to the controller, which is worse than the bug it would "fix"). What
+     * was actually broken is that nothing ever noticed or recovered when
+     * something else — an IME opening, another accessibility overlay, a
+     * system dialog — stole that focus away, silently killing stick input
+     * until the service was restarted. This watchdog (started in
+     * onServiceConnected) plus the view's own onWindowFocusChanged hook
+     * below re-request focus the moment it's lost, so joystick capture
+     * self-heals instead of going quietly dead.
+     */
+    private fun startFocusWatchdog() {
+        focusWatchdogJob = serviceScope.launch {
+            while (isActive) {
+                motionCaptureView?.let { view ->
+                    if (!view.isFocused) {
+                        try {
+                            view.requestFocus()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Focus watchdog could not reclaim motion capture focus", e)
+                        }
+                    }
+                }
+                delay(FOCUS_WATCHDOG_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun startLegendTick() {
+        legendTickJob = serviceScope.launch {
+            while (isActive) {
+                if (::legendOverlay.isInitialized && legendOverlay.isShowing() && ::cursorOverlay.isInitialized) {
+                    legendOverlay.update(cursorOverlay.getPosition(), LegendOverlay.legendTextFor(profile))
+                }
+                delay(LEGEND_TICK_INTERVAL_MS)
+            }
+        }
+    }
+
     private fun handleGenericMotion(event: MotionEvent): Boolean {
         if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
 
-        // Left stick → cursor movement.
-        val lx = inputMapper.axisValue(event, MotionEvent.AXIS_X)
-        val ly = inputMapper.axisValue(event, MotionEvent.AXIS_Y)
+        // Left stick → cursor movement, drift-corrected before deadzone/sensitivity.
+        val rawLx = inputMapper.axisValue(event, MotionEvent.AXIS_X)
+        val rawLy = inputMapper.axisValue(event, MotionEvent.AXIS_Y)
+        val (lx, ly) = driftCalibrator.correct(rawLx, rawLy)
         val (dx, dy) = inputMapper.applyDeadzoneAndSensitivity(lx, ly, profile.deadzone, profile.sensitivity)
         if (dx != 0f || dy != 0f) {
             cursorOverlay.applyDelta(dx * CURSOR_SPEED_PX, dy * CURSOR_SPEED_PX)
@@ -402,7 +646,8 @@ class ControllerAccessibilityService : AccessibilityService() {
         val (_, sy) = inputMapper.applyDeadzoneAndSensitivity(rx, ry, profile.deadzone, 1f)
         if (sy != 0f) maybeDispatchStickScroll(sy)
 
-        // Triggers → held scroll up/down. Different pads report these on different axes.
+        // Triggers → PTT edges (VOICE_TRIGGER) or held scroll (SCROLL), depending on
+        // mapping. Different pads report these on different axes.
         val leftTrigger = inputMapper.axisValue(event, MotionEvent.AXIS_LTRIGGER)
             .takeIf { it != 0f } ?: inputMapper.axisValue(event, MotionEvent.AXIS_BRAKE)
         val rightTrigger = inputMapper.axisValue(event, MotionEvent.AXIS_RTRIGGER)
@@ -421,29 +666,53 @@ class ControllerAccessibilityService : AccessibilityService() {
         dispatchScroll(cursorOverlay.getPosition(), direction)
     }
 
+    /** Analog triggers have no discrete KeyEvent up/down — this derives rising/falling
+     * edges from the continuous axis value so VOICE_TRIGGER (PttController) and
+     * SCROLL (repeat job) both get proper press/release semantics. */
     private fun handleTrigger(input: ControllerInput, value: Float) {
         val active = inputMapper.isTriggerActive(value)
-        val running = activeTriggerRunnables.containsKey(input)
-        if (active && !running) {
-            val action = inputMapper.resolveAction(profile, input)
-            val runnable = object : Runnable {
-                override fun run() {
-                    if (action.type == ActionType.SCROLL) {
-                        action.swipeDirection?.let { dispatchScroll(cursorOverlay.getPosition(), it) }
-                    }
-                    mainHandler.postDelayed(this, TRIGGER_REPEAT_MS)
-                }
+        val wasActive = triggerHeldState[input] ?: false
+        if (active == wasActive) return
+
+        val action = inputMapper.resolveAction(profile, input)
+        triggerHeldState[input] = active
+
+        if (active) {
+            when (action.type) {
+                ActionType.VOICE_TRIGGER -> pttController.onButtonDown()
+                ActionType.SCROLL -> startTriggerRepeat(input, action)
+                else -> Unit
             }
-            activeTriggerRunnables[input] = runnable
-            mainHandler.post(runnable)
-        } else if (!active && running) {
-            activeTriggerRunnables.remove(input)?.let { mainHandler.removeCallbacks(it) }
+        } else {
+            when (action.type) {
+                ActionType.VOICE_TRIGGER -> pttController.onButtonUp()
+                ActionType.SCROLL -> stopTriggerRepeat(input)
+                else -> Unit
+            }
         }
     }
 
-    private fun cancelAllTriggerRunnables() {
-        activeTriggerRunnables.values.forEach { mainHandler.removeCallbacks(it) }
-        activeTriggerRunnables.clear()
+    private fun startTriggerRepeat(input: ControllerInput, action: ButtonAction) {
+        if (activeTriggerJobs.containsKey(input)) return
+        // Child of serviceScope, not a Handler.postDelayed chain — cancelled
+        // uniformly by serviceScope.cancel() in teardown() (A5).
+        val job = serviceScope.launch {
+            while (isActive) {
+                action.swipeDirection?.let { dispatchScroll(cursorOverlay.getPosition(), it) }
+                delay(TRIGGER_REPEAT_MS)
+            }
+        }
+        activeTriggerJobs[input] = job
+    }
+
+    private fun stopTriggerRepeat(input: ControllerInput) {
+        activeTriggerJobs.remove(input)?.cancel()
+    }
+
+    private fun cancelAllTriggerJobs() {
+        activeTriggerJobs.values.forEach { it.cancel() }
+        activeTriggerJobs.clear()
+        triggerHeldState.clear()
     }
 
     // ---------------------------------------------------------------------
@@ -506,7 +775,7 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     /** Tiny focusable overlay whose sole purpose is to receive joystick MotionEvents. */
     private class MotionCaptureView(
-        context: android.content.Context,
+        context: Context,
         private val onMotion: (MotionEvent) -> Boolean
     ) : View(context) {
         init {
@@ -516,6 +785,15 @@ class ControllerAccessibilityService : AccessibilityService() {
 
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             return if (onMotion(event)) true else super.onGenericMotionEvent(event)
+        }
+
+        override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+            super.onWindowFocusChanged(hasWindowFocus)
+            if (!hasWindowFocus) {
+                // Immediate reclaim attempt; startFocusWatchdog() above is the
+                // periodic backstop in case this callback itself is missed.
+                post { requestFocus() }
+            }
         }
     }
 
@@ -533,6 +811,9 @@ class ControllerAccessibilityService : AccessibilityService() {
         private const val SWIPE_DISTANCE_PX = 300f
         private const val TRIGGER_REPEAT_MS = 300L
         private const val STICK_SCROLL_COOLDOWN_MS = 200L
+        private const val FOCUS_WATCHDOG_INTERVAL_MS = 2000L
+        private const val LEGEND_TICK_INTERVAL_MS = 100L
+        private const val MAX_RECORDING_MS = 30_000L
 
         /** Set while the service is bound; lets the UI reflect live enabled state. */
         var instance: ControllerAccessibilityService? = null
