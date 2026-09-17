@@ -4,6 +4,7 @@ import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Path
@@ -24,6 +25,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.ai.controller.models.ActionType
@@ -211,7 +213,7 @@ class ControllerAccessibilityService : AccessibilityService() {
             ActionType.SWIPE -> action.swipeDirection?.let { dispatchSwipe(cursor, it, action.durationMs) }
             ActionType.KEY_EVENT -> handleKeyEventAction(action)
             ActionType.VOICE_TRIGGER -> Unit // handled by PttController edges, not a single-shot tap
-            ActionType.SHOW_KEYBOARD -> setSoftKeyboardMode(true)
+            ActionType.SHOW_KEYBOARD -> startCustomKeyboard()
             ActionType.FOCUS_NEXT -> moveAccessibilityFocus(true)
             ActionType.CYCLE_CONTEXT -> cycleContext()
             ActionType.NONE -> Unit
@@ -229,6 +231,18 @@ class ControllerAccessibilityService : AccessibilityService() {
             KeyEvent.KEYCODE_DPAD_LEFT -> cursorOverlay.applyDelta(-CURSOR_STEP_PX, 0f)
             KeyEvent.KEYCODE_DPAD_RIGHT -> cursorOverlay.applyDelta(CURSOR_STEP_PX, 0f)
             else -> Log.w(TAG, "keyCode=${action.keyCode} has no public injection path; ignoring")
+        }
+    }
+
+    private fun startCustomKeyboard() {
+        try {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(null, 0)
+            val intent = Intent(this, com.ai.controller.ui.KeyboardActivity::class.java)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start custom keyboard", e)
         }
     }
 

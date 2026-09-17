@@ -42,6 +42,8 @@
             android:name=".ui.KeyboardActivity"
             android:exported="false"
             android:label="@string/keyboard_title"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="stateAlwaysHidden"
             android:parentActivityName=".MainActivity" />
 
         <service

@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.GridLayout
 import android.widget.LinearLayout
@@ -62,6 +63,9 @@ class KeyboardActivity : AppCompatActivity() {
         root.addView(buildBottomRow())
 
         setContentView(root)
+
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(window.decorView.windowToken, 0)
     }
 
     // ── Mode row ─────────────────────────────────────────────────────────
