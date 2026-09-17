@@ -105,6 +105,9 @@ class ControllerAccessibilityService : AccessibilityService() {
         profileManager = ProfileManager(this)
         contextSwitcher = ContextSwitcher(this)
         voiceManager = VoiceManager(this)
+        // Apply the customer's saved emoji skin tone before any transcript can
+        // be styled (SkinToneStore default: Dark, the Linux build's look).
+        TextStyles.setSkinTone(SkinToneStore.load(this))
         profile = contextSwitcher.profileFor(contextSwitcher.activeContext(), profileManager)
 
         cursorOverlay = CursorOverlay(this)

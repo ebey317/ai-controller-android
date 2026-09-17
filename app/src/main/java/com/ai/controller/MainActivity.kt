@@ -6,7 +6,10 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
+import android.view.View
 import android.view.inputmethod.InputMethodManager
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -83,6 +86,24 @@ class MainActivity : AppCompatActivity() {
         binding.switchInvertScroll.setOnCheckedChangeListener { _, checked ->
             profile.invertScroll = checked
             profileManager.saveProfile(profile)
+        }
+
+        // Emoji skin tone — every customer picks their own; each option's label
+        // previews the tone on a ✌ emoji, so the choice shows what dictation
+        // will actually type. Applies immediately (TextStyles.SetSkinTone
+        // rebuilds the emoji tables) and persists via SkinToneStore.
+        binding.spinnerSkinTone.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            EmojiSkinTone.entries.map { it.label }
+        )
+        binding.spinnerSkinTone.setSelection(EmojiSkinTone.entries.indexOf(SkinToneStore.load(this)))
+        binding.spinnerSkinTone.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>, view: View?, pos: Int, id: Long) {
+                val tone = EmojiSkinTone.entries[pos]
+                SkinToneStore.save(this@MainActivity, tone)
+                TextStyles.setSkinTone(tone)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>) = Unit
         }
 
         binding.switchStartOnBoot.isChecked = getStartOnBootPref()
