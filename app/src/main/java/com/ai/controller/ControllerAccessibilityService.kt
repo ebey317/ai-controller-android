@@ -247,10 +247,44 @@ class ControllerAccessibilityService : AccessibilityService() {
         // fullscreen activity stays only as a last-resort fallback.
         var shownNative = false
         try {
-            softKeyboardController.setShowMode(2) // SHOW_MODE_VISIBLE
-            shownNative = true
+            // Verified against the real SDK API surface: SoftKeyboardController has NO
+            // "show()" — setShowMode only sets future default behavior (a no-op for
+            // "open Gboard right now", which is why the button did nothing). The
+            // actual open-the-keyboard-now call is switchToInputMethod(API 30+),
+            // which swaps to Gboard on the focused field and pops it open.
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                val gboard = "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME"
+                shownNative = try {
+                    softKeyboardController.switchToInputMethod(gboard)
+                } catch (e: Exception) {
+                    Log.w(TAG, "switchToInputMethod failed", e)
+                    false
+                }
+            }
+            // Also lift any previously-set hidden mode (older path kept for pre-30).
+            if (!shownNative || android.os.Build.VERSION.SDK_INT < 30) {
+                try {
+                    softKeyboardController.setShowMode(2) // SHOW_MODE_VISIBLE
+                    shownNative = true
+                } catch (e: Exception) {
+                    Log.w(TAG, "setShowMode failed", e)
+                }
+            }
         } catch (e: Exception) {
             Log.w(TAG, "softKeyboardController unavailable, falling back to KeyboardActivity", e)
+        }
+        // setShowMode alone can be a no-op when no field has IME focus — nudge the
+        // focused node's editor so the system IME actually opens on this field.
+        if (shownNative) {
+            try {
+                val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                if (focused != null && focused.isEditable) {
+                    focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "focus nudge for IME failed", e)
+            }
         }
         if (!shownNative) {
             try {
