@@ -13,10 +13,10 @@ import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.ai.controller.ControllerAccessibilityService
+import com.ai.controller.PinStore
 import com.ai.controller.PttModeStore
 import com.ai.controller.R
 import com.ai.controller.TextStyles
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -111,7 +111,7 @@ class KeyboardActivity : AppCompatActivity() {
 
     private fun refreshPinsRow(row: LinearLayout) {
         row.removeAllViews()
-        val pins = loadPins()
+        val pins = PinStore.load(this)
         for (index in 0 until pins.length()) {
             val pin = pins.getJSONObject(index)
             val label = pin.optString("label", "?").take(10)
@@ -120,7 +120,7 @@ class KeyboardActivity : AppCompatActivity() {
                     ControllerAccessibilityService.instance?.typeText(pin.optString("text", ""))
                 }
                 setOnLongClickListener {
-                    removePin(index)
+                    PinStore.removeAt(this@KeyboardActivity, index)
                     refreshPinsRow(row)
                     Toast.makeText(this@KeyboardActivity, "Unpinned $label", Toast.LENGTH_SHORT).show()
                     true
@@ -128,7 +128,7 @@ class KeyboardActivity : AppCompatActivity() {
             }
             row.addView(btn)
         }
-        if (pins.length() < PIN_SLOTS) {
+        if (pins.length() < PinStore.PIN_SLOTS) {
             row.addView(pinButton(getString(R.string.keyboard_pin_add)).apply {
                 setOnClickListener { onPinAdd(row) }
             })
@@ -136,11 +136,6 @@ class KeyboardActivity : AppCompatActivity() {
     }
 
     private fun onPinAdd(row: LinearLayout) {
-        val pins = loadPins()
-        if (pins.length() >= PIN_SLOTS) {
-            Toast.makeText(this, R.string.keyboard_pin_full, Toast.LENGTH_SHORT).show()
-            return
-        }
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }
             ?.getItemAt(0)?.coerceToText(this)?.toString()?.trim().orEmpty()
@@ -149,35 +144,12 @@ class KeyboardActivity : AppCompatActivity() {
             return
         }
         val label = if (text.length <= 10) text else text.take(9) + "…"
-        val pin = JSONObject().put("label", label).put("text", text)
-        pins.put(pin)
-        savePins(pins)
+        if (!PinStore.add(this, label, text)) {
+            Toast.makeText(this, R.string.keyboard_pin_full, Toast.LENGTH_SHORT).show()
+            return
+        }
         refreshPinsRow(row)
     }
-
-    private fun loadPins(): JSONArray {
-        val raw = prefs().getString(KEY_PINS, null) ?: return defaultPins()
-        return runCatching { JSONArray(raw) }.getOrDefault(defaultPins())
-    }
-
-    private fun savePins(pins: JSONArray) {
-        prefs().edit().putString(KEY_PINS, pins.toString()).apply()
-    }
-
-    private fun removePin(index: Int) {
-        val pins = loadPins()
-        val kept = JSONArray()
-        for (i in 0 until pins.length()) if (i != index) kept.put(pins.get(i))
-        savePins(kept)
-    }
-
-    private fun defaultPins(): JSONArray = JSONArray().apply {
-        put(JSONObject().put("label", "hello").put("text", "Hello! "))
-        put(JSONObject().put("label", "thanks").put("text", "Thank you! "))
-        put(JSONObject().put("label", "email").put("text", "@"))
-    }
-
-    private fun prefs() = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
     // ── QWERTY key grid ──────────────────────────────────────────────────
 
@@ -250,9 +222,4 @@ class KeyboardActivity : AppCompatActivity() {
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
     }
 
-    companion object {
-        private const val PREFS_NAME = "ai_controller_keyboard"
-        private const val KEY_PINS = "pinned_snippets"
-        private const val PIN_SLOTS = 5
-    }
 }

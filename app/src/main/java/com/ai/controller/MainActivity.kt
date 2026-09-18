@@ -24,6 +24,11 @@ private const val RC_RECORD_AUDIO = 1001
 private const val PREFS_MAIN = "main"
 private const val KEY_SERVICE_ACTIVE = "service_active"
 
+// Same prefs file ControllerAccessibilityService reads (PROFILE_PREFS_NAME) — the
+// service's registered SharedPreferences listener picks up this flip live, no
+// rebind needed, so the debug overlay appears/disappears immediately on toggle.
+private const val PREFS_CONTROLLER = "ai_controller_prefs"
+
 /**
  * Top-level settings screen: enable/disable the accessibility service, tune
  * cursor sensitivity/deadzone, toggle the on-screen cursor and start-on-boot,
@@ -86,6 +91,11 @@ class MainActivity : AppCompatActivity() {
         binding.switchInvertScroll.setOnCheckedChangeListener { _, checked ->
             profile.invertScroll = checked
             profileManager.saveProfile(profile)
+        }
+
+        binding.switchDebugOverlay.isChecked = getDebugOverlayPref()
+        binding.switchDebugOverlay.setOnCheckedChangeListener { _, checked ->
+            setDebugOverlayPref(checked)
         }
 
         // Emoji skin tone — every customer picks their own; each option's label
@@ -243,6 +253,17 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(KEY_SERVICE_ACTIVE, value)
             .apply()
         showToast(getString(if (value) R.string.toast_service_started else R.string.toast_service_stopped))
+    }
+
+    private fun getDebugOverlayPref(): Boolean =
+        getSharedPreferences(PREFS_CONTROLLER, MODE_PRIVATE)
+            .getBoolean(ControllerAccessibilityService.KEY_DEBUG_ENABLED, false)
+
+    private fun setDebugOverlayPref(value: Boolean) {
+        getSharedPreferences(PREFS_CONTROLLER, MODE_PRIVATE)
+            .edit()
+            .putBoolean(ControllerAccessibilityService.KEY_DEBUG_ENABLED, value)
+            .apply()
     }
 
     private fun getStartOnBootPref(): Boolean =

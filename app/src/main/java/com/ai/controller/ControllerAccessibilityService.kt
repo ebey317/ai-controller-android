@@ -2,9 +2,9 @@ package com.ai.controller
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Path
@@ -67,6 +67,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     private lateinit var contextSwitcher: ContextSwitcher
     private lateinit var cursorOverlay: CursorOverlay
     private lateinit var legendOverlay: LegendOverlay
+    private lateinit var debugOverlay: DebugOverlay
     private lateinit var voiceManager: VoiceManager
     private lateinit var windowManager: WindowManager
     private var profile: ControllerProfile = ControllerProfile.default()
@@ -96,12 +97,45 @@ class ControllerAccessibilityService : AccessibilityService() {
     @Volatile private var voiceRecordCancelled = false
     private var recordStartElapsedMs = 0L
 
-    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-        reloadActiveProfile()
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == KEY_DEBUG_ENABLED) {
+            applyDebugPref()
+        } else {
+            reloadActiveProfile()
+        }
+    }
+
+    private fun debugEnabled(): Boolean =
+        getSharedPreferences(PROFILE_PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_DEBUG_ENABLED, false)
+
+    private fun applyDebugPref() {
+        if (!::debugOverlay.isInitialized) return
+        if (debugEnabled()) debugOverlay.show() else debugOverlay.hide()
+    }
+
+    /** Updates the floating debug readout when it's enabled; always logs regardless
+     * (see individual Log.d calls) so toast suppression never hides input activity. */
+    private fun showDebug(text: String) {
+        if (::debugOverlay.isInitialized && debugOverlay.isShowing()) debugOverlay.update(text)
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // res/xml/accessibility_service_config.xml already declares these, but that
+        // config is only guaranteed to be applied by the framework on some OEM
+        // skins — setting it on the live serviceInfo here is the belt-and-suspenders
+        // fix for "controller buttons don't reach the service at all" reports,
+        // since a missing FLAG_REQUEST_FILTER_KEY_EVENTS silently drops onKeyEvent.
+        val info = serviceInfo ?: AccessibilityServiceInfo()
+        info.flags = info.flags or
+            AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
+            AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+            AccessibilityServiceInfo.FLAG_INPUT_METHOD_EDITOR
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        info.notificationTimeout = 0
+        serviceInfo = info
+
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         profileManager = ProfileManager(this)
         contextSwitcher = ContextSwitcher(this)
@@ -113,10 +147,12 @@ class ControllerAccessibilityService : AccessibilityService() {
 
         cursorOverlay = CursorOverlay(this)
         legendOverlay = LegendOverlay(this)
+        debugOverlay = DebugOverlay(this)
         if (profile.cursorEnabled) {
             cursorOverlay.show()
             legendOverlay.show()
         }
+        if (debugEnabled()) debugOverlay.show()
 
         pttController = PttController(
             onStart = { startVoiceRecording() },
@@ -165,11 +201,24 @@ class ControllerAccessibilityService : AccessibilityService() {
         serviceScope.cancel()
         if (::cursorOverlay.isInitialized) cursorOverlay.hide()
         if (::legendOverlay.isInitialized) legendOverlay.hide()
+        if (::debugOverlay.isInitialized) debugOverlay.hide()
         if (instance === this) instance = null
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // No content-tree reactions needed; input is driven entirely by key/motion callbacks.
+        // Window-state changes (new foreground app, IME opening, dialog appearing)
+        // are exactly the moments that can silently steal focus from the 1x1
+        // joystick-capture overlay — reclaim it immediately here instead of
+        // waiting for the periodic watchdog (startFocusWatchdog) to notice.
+        motionCaptureView?.let { view ->
+            if (!view.isFocused) {
+                try {
+                    view.requestFocus()
+                } catch (e: Exception) {
+                    Log.w(TAG, "onAccessibilityEvent focus reclaim failed", e)
+                }
+            }
+        }
     }
 
     override fun onInterrupt() {
@@ -191,9 +240,12 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (event.repeatCount > 0) return true
 
         val action = inputMapper.resolveAction(profile, input)
+        Log.d(TAG, "captured input=$input action=${action.type} profile=${profile.name}")
+        showDebug("Last: $input\nAction: ${action.type}\nPTT: ${if (pttController.isHeld) "HELD" else "idle"}")
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (action.type == ActionType.VOICE_TRIGGER) {
+                    Log.d(TAG, "PTT down received (captured view, input=$input)")
                     pttController.onButtonDown()
                 } else {
                     handleButtonDown(input, action)
@@ -201,6 +253,7 @@ class ControllerAccessibilityService : AccessibilityService() {
             }
             KeyEvent.ACTION_UP -> {
                 if (action.type == ActionType.VOICE_TRIGGER) {
+                    Log.d(TAG, "PTT up received (captured view, input=$input)")
                     pttController.onButtonUp()
                 }
             }
@@ -208,14 +261,23 @@ class ControllerAccessibilityService : AccessibilityService() {
         return true
     }
 
+    /**
+     * a11y key filter path (FLAG_REQUEST_FILTER_KEY_EVENTS). Returns true for any
+     * mapped input so Android stops delivering it to the foreground app — the
+     * whole point of a controller-as-input-method service — and false (via
+     * super, which is itself false) only for keys we don't recognize at all.
+     */
     override fun onKeyEvent(event: KeyEvent): Boolean {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return super.onKeyEvent(event)
         if (event.repeatCount > 0) return true // swallow OS auto-repeat; we drive our own timing
 
         val action = inputMapper.resolveAction(profile, input)
+        Log.d(TAG, "onKeyEvent input=$input action=${action.type} profile=${profile.name}")
+        showDebug("Last: $input\nAction: ${action.type}\nPTT: ${if (pttController.isHeld) "HELD" else "idle"}")
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (action.type == ActionType.VOICE_TRIGGER) {
+                    Log.d(TAG, "PTT down received (a11y filter, input=$input)")
                     pttController.onButtonDown()
                 } else {
                     handleButtonDown(input, action)
@@ -225,6 +287,7 @@ class ControllerAccessibilityService : AccessibilityService() {
                 // Only voice-trigger cares about release; every other action already
                 // fired on ACTION_DOWN above, matching the original tap-on-press model.
                 if (action.type == ActionType.VOICE_TRIGGER) {
+                    Log.d(TAG, "PTT up received (a11y filter, input=$input)")
                     pttController.onButtonUp()
                 }
             }
@@ -267,61 +330,58 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * ⧉ (Select/View) — opens AI Controller's own [com.ai.controller.keyboard.AIInputMethodService]
+     * overlay keyboard, not a fullscreen Activity (Android 15 blocks background
+     * activity launches from an AccessibilityService with no foreground gesture
+     * anyway, which is why the old KeyboardActivity launch here was silently dead)
+     * and not Gboard (the point of this IME is the emoji-skin-tone/text-style/pin
+     * keyboard, which only the custom IME provides).
+     */
     private fun startCustomKeyboard() {
-        // Android 15 blocks background activity launches (startActivity from an
-        // AccessibilityService with no associated foreground gesture), which made the
-        // KeyboardActivity path silently dead. The native keyboard (Gboard) via
-        // softKeyboardController is both allowed and what the user wants — the custom
-        // fullscreen activity stays only as a last-resort fallback.
-        var shownNative = false
+        var switched = false
         try {
-            // Verified against the real SDK API surface: SoftKeyboardController has NO
-            // "show()" — setShowMode only sets future default behavior (a no-op for
-            // "open Gboard right now", which is why the button did nothing). The
-            // actual open-the-keyboard-now call is switchToInputMethod(API 30+),
-            // which swaps to Gboard on the focused field and pops it open.
-            if (android.os.Build.VERSION.SDK_INT >= 30) {
-                val gboard = "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME"
-                shownNative = try {
-                    softKeyboardController.switchToInputMethod(gboard)
-                } catch (e: Exception) {
-                    Log.w(TAG, "switchToInputMethod failed", e)
-                    false
-                }
+            switched = softKeyboardController.switchToInputMethod(ourImeId())
+        } catch (e: Exception) {
+            Log.w(TAG, "switchToInputMethod(AIInputMethodService) failed", e)
+        }
+        if (switched) {
+            try {
+                softKeyboardController.setShowMode(2) // SHOW_MODE_VISIBLE
+            } catch (e: Exception) {
+                Log.w(TAG, "setShowMode failed", e)
             }
-            // Also lift any previously-set hidden mode (older path kept for pre-30).
-            if (!shownNative || android.os.Build.VERSION.SDK_INT < 30) {
-                try {
-                    softKeyboardController.setShowMode(2) // SHOW_MODE_VISIBLE
-                    shownNative = true
-                } catch (e: Exception) {
-                    Log.w(TAG, "setShowMode failed", e)
-                }
+            nudgeFocusedFieldForIme()
+            showDebug("Kbd: AI Controller IME shown")
+        } else {
+            // switchToInputMethod only succeeds once the user has enabled the IME in
+            // system settings (Settings > System > Languages & input > On-screen
+            // keyboard) — there is no programmatic way around that first-time step.
+            // Surface the system picker so they can do it in one tap.
+            Log.w(TAG, "AI Controller IME not enabled yet — opening input method picker")
+            showDebug("Kbd: enable 'AI Controller' in the IME picker")
+            try {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                imm.showInputMethodPicker()
+            } catch (e: Exception) {
+                Log.e(TAG, "showInputMethodPicker failed", e)
+            }
+        }
+    }
+
+    private fun ourImeId(): String = "$packageName/.keyboard.AIInputMethodService"
+
+    /** setShowMode/switchToInputMethod alone can be a no-op when no field has IME
+     * focus — nudge the focused node's editor so the IME actually opens on it. */
+    private fun nudgeFocusedFieldForIme() {
+        try {
+            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (focused != null && focused.isEditable) {
+                focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "softKeyboardController unavailable, falling back to KeyboardActivity", e)
-        }
-        // setShowMode alone can be a no-op when no field has IME focus — nudge the
-        // focused node's editor so the system IME actually opens on this field.
-        if (shownNative) {
-            try {
-                val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                if (focused != null && focused.isEditable) {
-                    focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "focus nudge for IME failed", e)
-            }
-        }
-        if (!shownNative) {
-            try {
-                val intent = Intent(this, com.ai.controller.ui.KeyboardActivity::class.java)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to start custom keyboard", e)
-            }
+            Log.w(TAG, "focus nudge for IME failed", e)
         }
     }
 
@@ -520,6 +580,21 @@ class ControllerAccessibilityService : AccessibilityService() {
     private fun showVoiceToast(recording: Boolean) {
         val text = if (recording) "Listening..." else "Processing voice..."
         Toast.makeText(applicationContext, text, Toast.LENGTH_SHORT).show()
+        showDebug("Voice: ${if (recording) "recording" else "processing"}\nPTT: ${if (pttController.isHeld) "HELD" else "idle"}")
+    }
+
+    /** Voice/mic key on [com.ai.controller.keyboard.AIInputMethodService]'s overlay
+     * keyboard — routes through the exact same PttController edges as a controller
+     * trigger, so recording/transcription/consent/debug behavior stays identical
+     * regardless of which surface (controller or on-screen IME) started it. */
+    fun pttDownFromKeyboard() {
+        Log.d(TAG, "PTT down received (IME voice key)")
+        pttController.onButtonDown()
+    }
+
+    fun pttUpFromKeyboard() {
+        Log.d(TAG, "PTT up received (IME voice key)")
+        pttController.onButtonUp()
     }
 
     private fun writeWavToCache(pcmBytes: ByteArray, sampleRate: Int): File {
@@ -788,6 +863,7 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     private fun handleGenericMotion(event: MotionEvent): Boolean {
         if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
+        Log.d(TAG, "onGenericMotionEvent source=${event.source} profile=${profile.name}")
 
         // Left stick → cursor movement, drift-corrected before deadzone/sensitivity.
         val rawLx = inputMapper.axisValue(event, MotionEvent.AXIS_X)
@@ -834,16 +910,24 @@ class ControllerAccessibilityService : AccessibilityService() {
 
         val action = inputMapper.resolveAction(profile, input)
         triggerHeldState[input] = active
+        Log.d(TAG, "trigger input=$input action=${action.type} value=$value profile=${profile.name}")
+        showDebug("Last: $input (trigger)\nAction: ${action.type}\nPTT: ${if (active && action.type == ActionType.VOICE_TRIGGER) "HELD" else if (pttController.isHeld) "HELD" else "idle"}")
 
         if (active) {
             when (action.type) {
-                ActionType.VOICE_TRIGGER -> pttController.onButtonDown()
+                ActionType.VOICE_TRIGGER -> {
+                    Log.d(TAG, "PTT down received (trigger, input=$input)")
+                    pttController.onButtonDown()
+                }
                 ActionType.SCROLL -> startTriggerRepeat(input, action)
                 else -> Unit
             }
         } else {
             when (action.type) {
-                ActionType.VOICE_TRIGGER -> pttController.onButtonUp()
+                ActionType.VOICE_TRIGGER -> {
+                    Log.d(TAG, "PTT up received (trigger, input=$input)")
+                    pttController.onButtonUp()
+                }
                 ActionType.SCROLL -> stopTriggerRepeat(input)
                 else -> Unit
             }
@@ -972,6 +1056,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "AIControllerService"
         private const val PROFILE_PREFS_NAME = "ai_controller_prefs"
+        const val KEY_DEBUG_ENABLED = "debug_overlay_enabled"
 
         private const val CURSOR_SPEED_PX = 24f
         private const val CURSOR_STEP_PX = 60f

@@ -1,6 +1,7 @@
 package com.ai.controller
 
 import android.os.SystemClock
+import android.util.Log
 
 /**
  * Push-to-talk edge-detection state machine — the Kotlin analogue of
@@ -34,17 +35,27 @@ class PttController(
             onCancel()
             return
         }
-        if (now - lastEdgeMs < DEBOUNCE_MS) return // chatter from the controller trigger
+        if (now - lastEdgeMs < DEBOUNCE_MS) {
+            // Debounce is short for analog triggers (they're continuous, not
+            // contact-bouncy like cheap buttons) and longer for digital buttons.
+            Log.d("PttController", "down debounced: ${now - lastEdgeMs}ms since last edge")
+            return
+        }
         lastEdgeMs = now
         isHeld = true
+        Log.d("PttController", "PTT down -> onStart()")
         onStart()
     }
 
     /** Call on the mapped input's ACTION_UP. */
     fun onButtonUp() {
-        if (!isHeld) return
+        if (!isHeld) {
+            Log.d("PttController", "PTT up ignored (not held)")
+            return
+        }
         lastEdgeMs = SystemClock.elapsedRealtime()
         isHeld = false
+        Log.d("PttController", "PTT up -> onStop()")
         onStop()
     }
 
@@ -54,6 +65,7 @@ class PttController(
     }
 
     companion object {
-        private const val DEBOUNCE_MS = 400L
+        /** Short debounce: analog triggers don't bounce, and a 400ms gate made PTT feel dead. */
+        private const val DEBOUNCE_MS = 150L
     }
 }

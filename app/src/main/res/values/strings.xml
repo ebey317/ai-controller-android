@@ -16,6 +16,7 @@
     <string name="label_deadzone">Stick deadzone</string>
     <string name="label_invert_scroll">Invert scroll direction</string>
     <string name="label_skin_tone">Emoji skin tone</string>
+    <string name="label_debug_toggle">Debug overlay</string>
 
     <string name="action_open_button_mappings">Edit Button Mappings</string>
     <string name="action_reset_defaults">Reset to Defaults</string>
@@ -41,7 +42,8 @@
     <string name="toast_service_started">Service started</string>
     <string name="toast_service_stopped">Service stopped</string>
 
-    <string name="action_open_custom_keyboard">Open Custom Keyboard</string>
+    <string name="action_open_custom_keyboard">Open Legacy Keyboard (diagnostic)</string>
+    <string name="keyboard_subtype">AI Controller</string>
 
     <string name="consent_dialog_title">Voice dictation uses Groq</string>
     <string name="consent_dialog_message">When you hold the voice-trigger button, AI Controller records audio from your microphone and sends it to the Groq Whisper API (api.groq.com) over the internet to be transcribed into text. No other network service is contacted, and nothing is recorded unless you are actively holding the trigger. See PRIVACY.md for details. Allow this?</string>
