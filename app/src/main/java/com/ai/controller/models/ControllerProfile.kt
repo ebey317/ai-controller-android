@@ -39,55 +39,57 @@ data class ControllerProfile(
         const val DEFAULT_NAME = "Default"
 
         /**
-         * Default mapping translated (not literally copied) from the AntimicroX desktop
-         * profile — see android-controller-mapping-translation.md. Stock AccessibilityService
-         * cannot inject arbitrary KeyEvents (modifiers, Escape/Enter/Tab/Backspace/Delete)
-         * into another app's focused field, so those desktop keys are mapped to the closest
-         * real AccessibilityService action instead of a KEY_EVENT that would silently no-op
-         * in handleKeyEventAction(). Only the D-pad codes are real, dispatchable KEY_EVENTs
-         * here (remapped to cursor nudges in that same handler).
+         * Exact desktop-profile parity: labels and slot assignments mirror the
+         * AntiMicroX profile ai-controller (Linux) runs, button-for-button — see
+         * controller-legend.py's desktop legend line. Stock AccessibilityService
+         * cannot inject arbitrary KeyEvents (modifiers, Escape/Enter/Tab/Backspace/
+         * Delete) into another app's focused field, so several desktop keys are
+         * mapped to the closest real AccessibilityService action instead of a
+         * KEY_EVENT that would silently no-op in handleKeyEventAction(); the
+         * [ButtonAction.label] is kept as the literal desktop text regardless, so
+         * the legend always matches Linux even where the underlying gesture is a
+         * stand-in. Only the D-pad codes are real, dispatchable KEY_EVENTs here
+         * (remapped to cursor nudges in that same handler).
          *
-         * Picture-exact intent mapping:
+         * Desktop-exact intent mapping:
          *  - Left stick     → move cursor
          *  - Right stick up → scroll up  (Mouse 4 has no Android code)
          *  - Right stick dn → scroll down (Mouse 5 has no Android code)
-         *  - Right stick LR → NONE
          *  - D-pad          → DPAD_UP/DOWN/LEFT/RIGHT (cursor nudge)
-         *  - A              → TAP (left mouse button / Mouse LB)
-         *  - B              → BACK (desktop BACKSPACE has no equivalent; BACK is the closest cancel-ish gesture)
-         *  - X              → BACK (desktop DELETE has no equivalent either; grouped with B rather than an unrelated feature)
-         *  - Y              → RECENTS (desktop SUPER_L opens the app switcher; RECENTS is Android's real equivalent)
-         *  - LB             → SCROLL UP (closest to desktop SHIFT_L, no real equivalent exists)
-         *  - RB             → LONG_PRESS (closest to desktop Mouse RB / right-click)
-         *  - LT             → NONE (no real equivalent to desktop CTRL_L)
-         *  - RT             → VOICE_TRIGGER (desktop F13 IS the push-to-talk/dictation key for
+         *  - A   "Click"    → TAP at cursor
+         *  - B   "Bksp"     → TEXT_EDIT backspace-at-cursor
+         *  - X   "Del"      → TEXT_EDIT forward-delete-at-cursor
+         *  - Y   "Super"    → RECENTS (desktop SUPER_L opens the app switcher; RECENTS is Android's real equivalent)
+         *  - LB  "Shift"    → TAP (no global modifier injection on Android; label-only parity)
+         *  - RB  "R·Clk"    → LONG_PRESS at cursor (right-click equivalent)
+         *  - LT  "Ctrl"     → TAP (no global modifier injection on Android; label-only parity)
+         *  - RT  "Talk"     → VOICE_TRIGGER (desktop F13 IS the push-to-talk/dictation key for
          *                     ptt_pynput.py — this is the one input where Android's existing STT
          *                     feature is the literal functional match, not a substitute)
-         *  - View/Back      → SHOW_KEYBOARD (toggle-slide-keyboard.sh on desktop)
-         *  - Menu/Start     → FOCUS_NEXT (closest to desktop TAB)
-         *  - LS click       → BACK (closest to desktop ESC)
-         *  - RS click       → TAP (closest to desktop ENTER / "activate")
-         *  - Guide/Xbox     → NONE
+         *  - ⧉   "Kbd"      → SHOW_KEYBOARD (toggle-slide-keyboard.sh on desktop)
+         *  - ☰   "Tab"      → FOCUS_NEXT
+         *  - LS  "Esc"      → BACK (Esc closes/cancels; BACK is the Android analog)
+         *  - RS  "Enter"    → TEXT_EDIT commit "\n" to the focused field
          */
         fun default(): ControllerProfile = ControllerProfile(
             name = DEFAULT_NAME,
             mappings = mutableMapOf(
-                ControllerInput.BUTTON_A to ButtonAction.tap(),
-                ControllerInput.BUTTON_B to ButtonAction.back(),
-                ControllerInput.BUTTON_X to ButtonAction.back(),
-                ControllerInput.BUTTON_Y to ButtonAction.recents(),
+                ControllerInput.BUTTON_A to ButtonAction.tap(label = "Click"),
+                ControllerInput.BUTTON_B to ButtonAction.backspace(),
+                ControllerInput.BUTTON_X to ButtonAction.deleteNext(),
+                ControllerInput.BUTTON_Y to ButtonAction.recents(label = "Super"),
                 ControllerInput.DPAD_UP to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_UP),
                 ControllerInput.DPAD_DOWN to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_DOWN),
                 ControllerInput.DPAD_LEFT to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_LEFT),
                 ControllerInput.DPAD_RIGHT to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_RIGHT),
-                ControllerInput.BUTTON_START to ButtonAction.focusNext(),
-                ControllerInput.BUTTON_SELECT to ButtonAction.showKeyboard(),
-                ControllerInput.BUTTON_L1 to ButtonAction.scroll(SwipeDirection.UP),
-                ControllerInput.BUTTON_R1 to ButtonAction.longPress(),
-                ControllerInput.BUTTON_THUMBL to ButtonAction.back(),
-                ControllerInput.BUTTON_THUMBR to ButtonAction.tap(),
-                ControllerInput.TRIGGER_L2 to ButtonAction.none(),
-                ControllerInput.TRIGGER_R2 to ButtonAction.voiceTrigger()
+                ControllerInput.BUTTON_START to ButtonAction.focusNext(label = "Tab"),
+                ControllerInput.BUTTON_SELECT to ButtonAction.showKeyboard(label = "Kbd"),
+                ControllerInput.BUTTON_L1 to ButtonAction.tap(label = "Shift"),
+                ControllerInput.BUTTON_R1 to ButtonAction.longPress(label = "R·Clk"),
+                ControllerInput.BUTTON_THUMBL to ButtonAction.back(label = "Esc"),
+                ControllerInput.BUTTON_THUMBR to ButtonAction.commitTextTo("\n", "Enter"),
+                ControllerInput.TRIGGER_L2 to ButtonAction.tap(label = "Ctrl"),
+                ControllerInput.TRIGGER_R2 to ButtonAction.voiceTrigger(label = "Talk")
             )
         )
     }
