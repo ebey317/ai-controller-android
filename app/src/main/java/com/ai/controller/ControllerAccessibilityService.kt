@@ -33,6 +33,7 @@ import com.ai.controller.models.ButtonAction
 import com.ai.controller.models.ControllerInput
 import com.ai.controller.models.ControllerProfile
 import com.ai.controller.models.SwipeDirection
+import com.ai.controller.models.TextEditOp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -215,6 +216,7 @@ class ControllerAccessibilityService : AccessibilityService() {
             ActionType.SCROLL -> action.swipeDirection?.let { dispatchScroll(cursor, it) }
             ActionType.SWIPE -> action.swipeDirection?.let { dispatchSwipe(cursor, it, action.durationMs) }
             ActionType.KEY_EVENT -> handleKeyEventAction(action)
+            ActionType.TEXT_EDIT -> handleTextEditAction(action)
             ActionType.VOICE_TRIGGER -> Unit // handled by PttController edges, not a single-shot tap
             ActionType.SHOW_KEYBOARD -> startCustomKeyboard()
             ActionType.FOCUS_NEXT -> moveAccessibilityFocus(true)
@@ -238,14 +240,26 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     private fun startCustomKeyboard() {
+        // Android 15 blocks background activity launches (startActivity from an
+        // AccessibilityService with no associated foreground gesture), which made the
+        // KeyboardActivity path silently dead. The native keyboard (Gboard) via
+        // softKeyboardController is both allowed and what the user wants — the custom
+        // fullscreen activity stays only as a last-resort fallback.
+        var shownNative = false
         try {
-            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(null, 0)
-            val intent = Intent(this, com.ai.controller.ui.KeyboardActivity::class.java)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
+            softKeyboardController.setShowMode(2) // SHOW_MODE_VISIBLE
+            shownNative = true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start custom keyboard", e)
+            Log.w(TAG, "softKeyboardController unavailable, falling back to KeyboardActivity", e)
+        }
+        if (!shownNative) {
+            try {
+                val intent = Intent(this, com.ai.controller.ui.KeyboardActivity::class.java)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start custom keyboard", e)
+            }
         }
     }
 
@@ -574,6 +588,52 @@ class ControllerAccessibilityService : AccessibilityService() {
             injectFocusedText(focused, current.dropLast(1))
         } catch (e: Exception) {
             Log.e(TAG, "backspaceOnce failed", e)
+        }
+    }
+
+    /**
+     * Cursor-relative text edits and literal text commits — the desktop profile's
+     * B/Bksp, X/Del and RS/Enter slots (ActionType.TEXT_EDIT). Uses the same
+     * findFocus + SET_TEXT path as KeyboardActivity so no extra permissions are needed.
+     */
+    private fun handleTextEditAction(action: ButtonAction) {
+        when (action.textOp) {
+            TextEditOp.BACKSPACE -> backspaceOnce()
+            TextEditOp.DELETE_NEXT -> deleteNextOnce()
+            null -> action.textPayload?.let { payload -> commitTextOnce(payload) }
+        }
+    }
+
+    /** Forward-delete: drops the character after the cursor. Uses the selection cursor
+     * when the field exposes one; falls back to a cursor-position-aware edit on the
+     * field's text so a mid-field caret is honored when available. */
+    fun deleteNextOnce() {
+        try {
+            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val current = focused.text?.toString().orEmpty()
+            if (current.isEmpty()) return
+            val sel = focused.textSelectionStart
+            if (sel in 0..current.length) {
+                if (sel >= current.length) return
+                injectFocusedText(focused, current.substring(0, sel) + current.substring(sel + 1))
+            } else {
+                // No selection info exposed: append-path has no "next" char, treat as no-op
+                // rather than guess (same honesty rule as the Linux legend's key labels).
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteNextOnce failed", e)
+        }
+    }
+
+    /** Commits [text] verbatim to the focused field at the cursor — the RS "Enter" slot. */
+    fun commitTextOnce(text: String) {
+        try {
+            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val current = focused.text?.toString().orEmpty()
+            val sel = if (focused.textSelectionStart in 0..current.length) focused.textSelectionStart else current.length
+            injectFocusedText(focused, current.substring(0, sel) + text + current.substring(sel))
+        } catch (e: Exception) {
+            Log.e(TAG, "commitTextOnce failed", e)
         }
     }
 

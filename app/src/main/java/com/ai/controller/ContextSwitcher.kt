@@ -68,50 +68,58 @@ class ContextSwitcher(context: Context) {
     // limited to what AccessibilityService can actually dispatch (tap/back/scroll/
     // focus/voice); address-bar and bookmark shortcuts have no public equivalent and
     // are left NONE rather than silently no-op through an unreachable KEY_EVENT.
+    // Labels are the literal Linux browser legend text ("A:Click B:Back X:Reload
+    // Y:New Tab ⧉:Address ☰:Bookmark LB:←Tab RB:Tab→ LT:R·Clk RT:Talk") even on
+    // slots (X/Reload, Y/New Tab) where the bound gesture is only the closest
+    // supported stand-in, same label/action-mismatch precedent as the desktop preset.
     private fun browserDefault(): ControllerProfile = ControllerProfile(
         name = BROWSER,
         mappings = mutableMapOf(
-            ControllerInput.BUTTON_A to ButtonAction.tap(),
-            ControllerInput.BUTTON_B to ButtonAction.back(),
-            ControllerInput.BUTTON_X to ButtonAction.none(),
-            ControllerInput.BUTTON_Y to ButtonAction.focusNext(),
-            ControllerInput.BUTTON_L1 to ButtonAction.scroll(SwipeDirection.LEFT),
-            ControllerInput.BUTTON_R1 to ButtonAction.scroll(SwipeDirection.RIGHT),
+            ControllerInput.BUTTON_A to ButtonAction.tap(label = "Click"),
+            ControllerInput.BUTTON_B to ButtonAction.back(label = "Back"),
+            ControllerInput.BUTTON_X to ButtonAction.none(label = "Reload"),
+            ControllerInput.BUTTON_Y to ButtonAction.focusNext(label = "New Tab"),
+            ControllerInput.BUTTON_L1 to ButtonAction.scroll(SwipeDirection.LEFT, label = "←Tab"),
+            ControllerInput.BUTTON_R1 to ButtonAction.scroll(SwipeDirection.RIGHT, label = "Tab→"),
             ControllerInput.DPAD_UP to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_UP),
             ControllerInput.DPAD_DOWN to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_DOWN),
             ControllerInput.DPAD_LEFT to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_LEFT),
             ControllerInput.DPAD_RIGHT to ButtonAction(ActionType.KEY_EVENT, keyCode = android.view.KeyEvent.KEYCODE_DPAD_RIGHT),
-            ControllerInput.BUTTON_START to ButtonAction.focusNext(),
-            ControllerInput.BUTTON_SELECT to ButtonAction.showKeyboard(),
-            ControllerInput.BUTTON_THUMBL to ButtonAction.tap(),
+            ControllerInput.BUTTON_START to ButtonAction.focusNext(label = "Bookmark"),
+            ControllerInput.BUTTON_SELECT to ButtonAction.showKeyboard(label = "Address"),
+            ControllerInput.BUTTON_THUMBL to ButtonAction.tap(label = "Space"),
             ControllerInput.BUTTON_THUMBR to ButtonAction.longPress(),
-            ControllerInput.TRIGGER_L2 to ButtonAction.longPress(),
-            ControllerInput.TRIGGER_R2 to ButtonAction.voiceTrigger()
+            ControllerInput.TRIGGER_L2 to ButtonAction.longPress(label = "R·Clk"),
+            ControllerInput.TRIGGER_R2 to ButtonAction.voiceTrigger(label = "Talk")
         )
     )
 
     // Translated from ALL_LAYOUTS["iptv"]. Channel up/down map to scroll (the
     // AntiMicroX profile's own closest real-world action for "move selection"),
     // rather than KEYCODE_CHANNEL_UP/DOWN which AccessibilityService cannot inject.
+    // Labels are the literal Linux iptv legend text ("A:▶‖ B:Stop X:Info Y:Full
+    // ⧉:Menu ☰:Guide LB:Ch↑ RB:Ch↓ LT:◀◀ RT:▶▶ L3:Space"); LT/RT keep their existing
+    // NONE/voice-trigger actions (no rewind/fast-forward path exists here) with only
+    // the label updated to match Linux, same documented mismatch as the desktop preset.
     private fun iptvDefault(): ControllerProfile = ControllerProfile(
         name = IPTV,
         mappings = mutableMapOf(
-            ControllerInput.BUTTON_A to ButtonAction.tap(),
-            ControllerInput.BUTTON_B to ButtonAction.back(),
-            ControllerInput.BUTTON_X to ButtonAction.tap(),
-            ControllerInput.BUTTON_Y to ButtonAction.longPress(),
-            ControllerInput.BUTTON_L1 to ButtonAction.scroll(SwipeDirection.UP),
-            ControllerInput.BUTTON_R1 to ButtonAction.scroll(SwipeDirection.DOWN),
+            ControllerInput.BUTTON_A to ButtonAction.tap(label = "▶‖"),
+            ControllerInput.BUTTON_B to ButtonAction.back(label = "Stop"),
+            ControllerInput.BUTTON_X to ButtonAction.tap(label = "Info"),
+            ControllerInput.BUTTON_Y to ButtonAction.longPress(label = "Full"),
+            ControllerInput.BUTTON_L1 to ButtonAction.scroll(SwipeDirection.UP, label = "Ch↑"),
+            ControllerInput.BUTTON_R1 to ButtonAction.scroll(SwipeDirection.DOWN, label = "Ch↓"),
             ControllerInput.DPAD_UP to ButtonAction.scroll(SwipeDirection.UP),
             ControllerInput.DPAD_DOWN to ButtonAction.scroll(SwipeDirection.DOWN),
             ControllerInput.DPAD_LEFT to ButtonAction.none(),
             ControllerInput.DPAD_RIGHT to ButtonAction.none(),
-            ControllerInput.BUTTON_START to ButtonAction.focusNext(),
-            ControllerInput.BUTTON_SELECT to ButtonAction.showKeyboard(),
-            ControllerInput.BUTTON_THUMBL to ButtonAction.back(),
+            ControllerInput.BUTTON_START to ButtonAction.focusNext(label = "Guide"),
+            ControllerInput.BUTTON_SELECT to ButtonAction.showKeyboard(label = "Menu"),
+            ControllerInput.BUTTON_THUMBL to ButtonAction.back(label = "Space"),
             ControllerInput.BUTTON_THUMBR to ButtonAction.tap(),
-            ControllerInput.TRIGGER_L2 to ButtonAction.none(),
-            ControllerInput.TRIGGER_R2 to ButtonAction.voiceTrigger()
+            ControllerInput.TRIGGER_L2 to ButtonAction.none(label = "◀◀"),
+            ControllerInput.TRIGGER_R2 to ButtonAction.voiceTrigger(label = "▶▶")
         )
     )
 

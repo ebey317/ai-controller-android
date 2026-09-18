@@ -98,6 +98,8 @@ class LegendOverlay(private val context: Context) {
         private const val OFFSET_X = 48
         private const val OFFSET_Y = 12
 
+        // Mirrors controller-legend.py's LEGEND_SLOT_ORDER on Linux exactly:
+        // A, B, X, Y, LB, RB, LT, RT, ⧉(Select/View), ☰(Start), LS(stick-click-L), RS(stick-click-R).
         private val SLOT_ORDER = listOf(
             ControllerInput.BUTTON_A to "A",
             ControllerInput.BUTTON_B to "B",
@@ -105,14 +107,31 @@ class LegendOverlay(private val context: Context) {
             ControllerInput.BUTTON_Y to "Y",
             ControllerInput.BUTTON_L1 to "LB",
             ControllerInput.BUTTON_R1 to "RB",
-            ControllerInput.TRIGGER_R2 to "RT"
+            ControllerInput.TRIGGER_L2 to "LT",
+            ControllerInput.TRIGGER_R2 to "RT",
+            ControllerInput.BUTTON_SELECT to "⧉",
+            ControllerInput.BUTTON_START to "☰",
+            ControllerInput.BUTTON_THUMBL to "LS",
+            ControllerInput.BUTTON_THUMBR to "RS"
         )
 
-        /** Builds a compact "A:tap  B:back  ..." string from a profile's mappings. */
-        fun legendTextFor(profile: ControllerProfile): String =
-            SLOT_ORDER.joinToString("   ") { (input, label) ->
+        /**
+         * Builds the Linux-matching legend string. Uses each action's [ButtonAction.label]
+         * (the literal desktop legend text, e.g. "Click"/"Bksp") when set, falling back to
+         * the enum-name form only for slots that never got a parity label. Entries are
+         * grouped two-per-line so the bubble stays narrow on a tablet.
+         */
+        fun legendTextFor(profile: ControllerProfile): String = entriesFor(profile)
+            .chunked(4)
+            .joinToString("\n") { row -> row.joinToString("   ") { it.first + ":" + it.second } }
+
+        private fun entriesFor(profile: ControllerProfile): List<Pair<String, String>> =
+            SLOT_ORDER.map { (input, label) ->
                 val action = profile.mappings[input]
-                "$label:${action?.type?.name?.lowercase()?.replace('_', ' ') ?: "none"}"
+                val text = action?.label?.takeIf { it.isNotBlank() }
+                    ?: action?.type?.name?.lowercase()?.replace('_', ' ')
+                    ?: "none"
+                label to text
             }
     }
 }
