@@ -180,6 +180,34 @@ class ControllerAccessibilityService : AccessibilityService() {
     // Digital buttons
     // ---------------------------------------------------------------------
 
+    /**
+     * Key handler shared by the a11y onKeyEvent filter AND the focused capture view's
+     * onKeyDown/onKeyUp. Both paths funnel into identical handling; whichever receives
+     * the event first wins, and the double-delivery risk is handled by the same
+     * idempotent edges (PTT down/up, press-fired actions).
+     */
+    private fun handleCapturedKeyEvent(event: KeyEvent): Boolean {
+        val input = inputMapper.keyCodeToInput(event.keyCode) ?: return false
+        if (event.repeatCount > 0) return true
+
+        val action = inputMapper.resolveAction(profile, input)
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (action.type == ActionType.VOICE_TRIGGER) {
+                    pttController.onButtonDown()
+                } else {
+                    handleButtonDown(input, action)
+                }
+            }
+            KeyEvent.ACTION_UP -> {
+                if (action.type == ActionType.VOICE_TRIGGER) {
+                    pttController.onButtonUp()
+                }
+            }
+        }
+        return true
+    }
+
     override fun onKeyEvent(event: KeyEvent): Boolean {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return super.onKeyEvent(event)
         if (event.repeatCount > 0) return true // swallow OS auto-repeat; we drive our own timing
@@ -495,7 +523,10 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     private fun writeWavToCache(pcmBytes: ByteArray, sampleRate: Int): File {
-        val wav = File(cacheDir, "voice_prompt.wav")
+        // Unique per recording: two rapid PTT takes ran processRecording concurrently
+        // and both wrote/read/deleted the SHARED voice_prompt.wav — the loser hit
+        // ENOENT (the exact "Voice transcription failed" stack). Unique names kill the race.
+        val wav = File(cacheDir, "voice_prompt_${System.currentTimeMillis()}_${(0..999).random()}.wav")
         FileOutputStream(wav).use { fos ->
             DataOutputStream(fos).use { out ->
                 val byteRate = sampleRate * 1 * 16 / 8
@@ -681,7 +712,11 @@ class ControllerAccessibilityService : AccessibilityService() {
     // ---------------------------------------------------------------------
 
     private fun attachMotionCapture() {
-        val view = MotionCaptureView(this) { event -> handleGenericMotion(event) }
+        val view = MotionCaptureView(
+            this,
+            onMotion = { event -> handleGenericMotion(event) },
+            onKey = { event -> handleCapturedKeyEvent(event) }
+        )
         val params = WindowManager.LayoutParams(
             1,
             1,
@@ -899,7 +934,8 @@ class ControllerAccessibilityService : AccessibilityService() {
     /** Tiny focusable overlay whose sole purpose is to receive joystick MotionEvents. */
     private class MotionCaptureView(
         context: Context,
-        private val onMotion: (MotionEvent) -> Boolean
+        private val onMotion: (MotionEvent) -> Boolean,
+        private val onKey: (KeyEvent) -> Boolean
     ) : View(context) {
         init {
             isFocusable = true
@@ -909,6 +945,19 @@ class ControllerAccessibilityService : AccessibilityService() {
         override fun onGenericMotionEvent(event: MotionEvent): Boolean {
             return if (onMotion(event)) true else super.onGenericMotionEvent(event)
         }
+
+        /**
+         * Digital gamepad buttons route through the FOCUSED view, not the a11y key
+         * filter — the a11y onKeyEvent path loses the race whenever the focused app
+         * window (Chrome, an IME…) consumes gamepad keycodes first. The stick/trigger
+         * capture view holds focus (watchdog-reclaimed), so handling KEY events here
+         * guarantees A/B/X/Y/⧉/☰ reach the mapper exactly like the motion path does.
+         */
+        override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+            if (onKey(event)) true else super.onKeyDown(keyCode, event)
+
+        override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+            if (onKey(event)) true else super.onKeyUp(keyCode, event)
 
         override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
             super.onWindowFocusChanged(hasWindowFocus)
