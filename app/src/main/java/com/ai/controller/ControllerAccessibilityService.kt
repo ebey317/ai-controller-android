@@ -129,8 +129,11 @@ class ControllerAccessibilityService : AccessibilityService() {
         val info = serviceInfo ?: AccessibilityServiceInfo()
         info.flags = info.flags or
             AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
-            AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-            AccessibilityServiceInfo.FLAG_INPUT_METHOD_EDITOR
+            AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        // NOTE: FLAG_INPUT_METHOD_EDITOR removed deliberately. The a11y service is
+        // NOT the IME; the real keyboard is com.ai.controller.keyboard.AIInputMethodService.
+        // Having this flag caused the framework to treat the a11y service as an internal
+        // IME, which blocked the separate IME from showing its input view.
         info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = 0
