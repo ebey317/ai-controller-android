@@ -1063,8 +1063,8 @@ class ControllerAccessibilityService : AccessibilityService() {
      * edges from the continuous axis value so VOICE_TRIGGER (PttController) and
      * SCROLL (repeat job) both get proper press/release semantics. */
     private fun handleTrigger(input: ControllerInput, value: Float) {
-        val active = inputMapper.isTriggerActive(value)
         val wasActive = triggerHeldState[input] ?: false
+        val active = inputMapper.isTriggerActive(value, wasActive)
         if (active == wasActive) return
 
         val action = inputMapper.resolveAction(profile, input)
