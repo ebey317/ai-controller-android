@@ -201,6 +201,7 @@ class AIInputMethodService : InputMethodService() {
 
     private fun populateKeyGrid(grid: LinearLayout) {
         grid.removeAllViews()
+        allButtons.clear()
         for (row in rowsLower) {
             val rowView = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (key in row) {

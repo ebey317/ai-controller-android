@@ -1,25 +1,25 @@
 {
   "findings": [
     {
-      "id": "SR1",
+      "id": "RV1",
       "severity": "error",
       "file": "app/src/main/java/com/ai/controller/keyboard/AIInputMethodService.kt",
-      "line": 245,
-      "description": "Enter key hardcodes `IME_ACTION_DONE` instead of checking the field's `EditorInfo` for the appropriate IME action (SEARCH, GO, SEND, NEXT, etc.). FloatingKeyboardOverlay and KeyboardActivity both call `pressEnter()` which dynamically checks for `ACTION_IME_ENTER` support and falls back to newline. As a real IME, AIInputMethodService has access to `currentInputEditorInfo()` (via `onStartInputView`) and should use the same dynamic logic so Enter submits forms/searches on single-line fields.",
+      "line": 202,
+      "description": "AIInputMethodService's populateKeyGrid() accumulates detached Button instances in allButtons on every shift toggle. allButtons is cleared only in onCreateInputView() (line 68), but populateKeyGrid() is also called from shift key click (line 236) and from letter key clicks when shiftOn=true (line 214). Each call creates ~30 new buttons via styledButton() (line 335 adds to allButtons) without clearing the list first. changeFontSize() (line 317) then iterates over allButtons including detached buttons, a memory leak that grows unbounded with each shift press.",
       "action": "auto-fix",
       "review_scope": "source"
     },
     {
-      "id": "SR2",
+      "id": "RV2",
       "severity": "warning",
       "file": "app/src/main/java/com/ai/controller/VoiceBridgeServer.kt",
       "line": 46,
-      "description": "VoiceBridgeServer generates a per-instance `authToken` (line 46) but this token is never exposed to any client. The server is started in ControllerAccessibilityService.onServiceConnected() but the token is not logged, stored, or shared via any IPC mechanism. If this endpoint is intended for local testing/debugging, there's no way for a legitimate client to authenticate. If it's only for internal future use, this should be documented or the auth removed.",
+      "description": "VoiceBridgeServer generates a per-instance authToken (line 46) but this token is never exposed to any client. The server is started in ControllerAccessibilityService.onServiceConnected() but the token is not logged, stored, or shared via any IPC mechanism. The comment states 'Give this only to the trusted in-process caller' but there's no mechanism to pass it to a caller. If this endpoint is intended for local testing/debugging, there's no way for a legitimate client to authenticate. If it's only for internal future use, this should be documented or the auth removed.",
       "action": "ask-user",
       "review_scope": "source"
     },
     {
-      "id": "SR3",
+      "id": "RV3",
       "severity": "warning",
       "file": "app/src/main/java/com/ai/controller/ProfileSerializer.kt",
       "line": 70,
@@ -28,29 +28,36 @@
       "review_scope": "source"
     },
     {
-      "id": "SR4",
+      "id": "RV4",
       "severity": "info",
       "file": "app/src/main/java/com/ai/controller/TextStyles.kt",
       "line": 319,
-      "description": "styleLabel() logic is duplicated in FloatingKeyboardOverlay (line 319), AIInputMethodService (line 127), and KeyboardActivity (line 89) with identical implementations. commitStyledChar() per-character styling logic is also triplicated across all three keyboards (FloatingKeyboardOverlay line 488, AIInputMethodService line 283, KeyboardActivity line 227). Violates DRY and creates maintenance risk when style behavior changes. Consider extracting to TextStyles or a shared helper.",
+      "description": "styleLabel() logic is duplicated in FloatingKeyboardOverlay (line 319), AIInputMethodService (line 129), and KeyboardActivity (line 89) with identical implementations. commitStyledChar() per-character styling logic is also triplicated across all three keyboards (FloatingKeyboardOverlay line 488, AIInputMethodService line 295, KeyboardActivity line 227). Violates DRY and creates maintenance risk when style behavior changes. Consider extracting to TextStyles or a shared helper.",
       "action": "ask-user",
       "review_scope": "source"
     },
     {
-      "id": "SR5",
+      "id": "RV5",
       "severity": "info",
       "file": "app/src/main/java/com/ai/controller/ui/KeyboardActivity.kt",
       "line": 75,
       "description": "KeyboardActivity lacks font size controls (A+/A- buttons with KeyboardFontSizeStore integration), skin tone picker (🎨 button), voice button, and punctuation row that FloatingKeyboardOverlay and AIInputMethodService both have. The activity is labeled 'Open Legacy Keyboard (diagnostic)' in MainActivity, so this minimalism may be intentional. If KeyboardActivity is meant to remain as a fallback, the missing features should be documented.",
       "action": "ask-user",
       "review_scope": "source"
+    },
+    {
+      "id": "RV6",
+      "severity": "info",
+      "file": "app/src/main/java/com/ai/controller/PttController.kt",
+      "line": 28,
+      "description": "PttController implements a double-press cancel feature: a second ACTION_DOWN while isHeld=true calls onCancel() and resets state (lines 28-35). This is new behavior not present in the Linux ptt_pynput.py original. A user holding the trigger who accidentally presses again (or a noisy trigger edge) will cancel their recording without warning. Could surprise users expecting the original press/hold/release model. Confirm if this is intentional.",
+      "action": "ask-user",
+      "review_scope": "source"
     }
   ],
-  "tested": [
-    "compileDebugKotlin"
-  ],
-  "testing_summary": "Build compiles successfully (./gradlew compileDebugKotlin). No test suite exists in this port yet per AGENTS.md.",
+  "tested": [],
+  "testing_summary": "Build compiles successfully (./gradlew compileDebugKotlin passes). No test suite exists in this port. Manual verification of the fixed behaviors (text accumulation, D-pad/hat-switch, Enter key, voice dictation append, drag clamp) was done by the author during development per the commit logs.",
   "risk_level": "medium",
-  "risk_rationale": "Core user-intent issues (text injection, D-pad/hat-switch, Enter, voice append, drag-clamp) are fixed. One error (AIInputMethodService Enter key hardcodes IME_ACTION_DONE) affects a registered system IME. Two warnings: VoiceBridgeServer auth token unreachable, and ProfileSerializer REV=3 migration causes data loss without release-note documentation. DRY violations across three keyboards are a maintenance concern but not correctness issues.",
+  "risk_rationale": "Core functionality fixes (text injection, D-pad/hat-switch, Enter, voice append, drag clamp) are correct and address the user's stated issues. However, there is one concrete bug (AIInputMethodService allButtons memory leak), a breaking data-loss migration (ProfileSerializer REV=3), an unusable endpoint (VoiceBridgeServer auth), and several maintenance concerns (duplicated keyboard logic, undocumented fallback limitations). These require decisions before merge.",
   "risk_scope": "source-or-external"
 }
