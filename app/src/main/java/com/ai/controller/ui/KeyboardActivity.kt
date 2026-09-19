@@ -241,7 +241,11 @@ class KeyboardActivity : AppCompatActivity() {
         text = label
         setTextColor(Color.parseColor("#E8E8E8"))
         setBackgroundColor(Color.parseColor("#23232B"))
-        setPadding(12, 12, 12, 12)
+        setPadding(0, 0, 0, 0)
+        minWidth = 0
+        minHeight = 0
+        minimumWidth = 0
+        minimumHeight = 0
     }
 
     private fun pinButton(label: String): Button = styledButton(label).apply {

@@ -325,9 +325,13 @@ class AIInputMethodService : InputMethodService() {
         text = label
         setTextColor(Color.parseColor("#E8E8E8"))
         setBackgroundColor(Color.parseColor("#23232B"))
-        setPadding(10, 10, 10, 10)
+        setPadding(0, 0, 0, 0)
         isAllCaps = false
         textSize = fontSizeSp
+        minWidth = 0
+        minHeight = 0
+        minimumWidth = 0
+        minimumHeight = 0
         allButtons.add(this)
     }
 
