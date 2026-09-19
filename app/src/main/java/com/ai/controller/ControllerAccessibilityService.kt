@@ -25,7 +25,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.view.inputmethod.InputMethodManager
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.ai.controller.models.ActionType
@@ -68,6 +68,8 @@ class ControllerAccessibilityService : AccessibilityService() {
     private lateinit var cursorOverlay: CursorOverlay
     private lateinit var legendOverlay: LegendOverlay
     private lateinit var debugOverlay: DebugOverlay
+    private lateinit var keyboardOverlay: FloatingKeyboardOverlay
+    private var keyboardTypingTarget: AccessibilityNodeInfo? = null
     private lateinit var voiceManager: VoiceManager
     private lateinit var windowManager: WindowManager
     private var profile: ControllerProfile = ControllerProfile.default()
@@ -151,6 +153,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         cursorOverlay = CursorOverlay(this)
         legendOverlay = LegendOverlay(this)
         debugOverlay = DebugOverlay(this)
+        keyboardOverlay = FloatingKeyboardOverlay(this)
         if (profile.cursorEnabled) {
             cursorOverlay.show()
             legendOverlay.show()
@@ -205,6 +208,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (::cursorOverlay.isInitialized) cursorOverlay.hide()
         if (::legendOverlay.isInitialized) legendOverlay.hide()
         if (::debugOverlay.isInitialized) debugOverlay.hide()
+        if (::keyboardOverlay.isInitialized) keyboardOverlay.hide()
         if (instance === this) instance = null
     }
 
@@ -302,7 +306,19 @@ class ControllerAccessibilityService : AccessibilityService() {
         val cursor = cursorOverlay.getPosition()
 
         when (action.type) {
-            ActionType.TAP -> dispatchTap(cursor)
+            // Live-tested 2026-09-18: dispatchGesture()'s synthetic tap does NOT register
+            // as a click on this service's own FloatingKeyboardOverlay window — confirmed
+            // with the cursor centered exactly on a key, action.type correctly resolved,
+            // and still nothing typed. Real touches (a finger, or adb's `input tap`) work
+            // fine on that same window; only accessibility-dispatched gestures don't land
+            // on a window owned by the dispatching service itself. Rather than fight that
+            // platform quirk, hit-test the keyboard's own view tree directly and click
+            // whatever's under the cursor in code — no OS gesture pipeline involved.
+            ActionType.TAP -> if (keyboardOverlay.isShowing() && keyboardOverlay.handleTapAt(cursor.x, cursor.y)) {
+                Unit
+            } else {
+                dispatchTap(cursor)
+            }
             ActionType.LONG_PRESS -> dispatchLongPress(cursor, action.durationMs)
             ActionType.BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
             ActionType.HOME -> performGlobalAction(GLOBAL_ACTION_HOME)
@@ -324,6 +340,22 @@ class ControllerAccessibilityService : AccessibilityService() {
         // system permission INJECT_EVENTS. For this standalone product, D-pad codes are
         // remapped to cursor nudges. F13-style "key" functionality is replaced by text
         // injection via the accessibility input method connection (see injectText).
+        //
+        // While the keyboard's drag handle is armed (FloatingKeyboardOverlay.dragging),
+        // the same D-pad input moves the keyboard panel itself instead of the cursor —
+        // this is the "drag and pull it" the desktop's mouse-drag handle does with a
+        // real pointer, translated to the one input this app already has for movement.
+        if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() && keyboardOverlay.isDragging()) {
+            val step = CURSOR_STEP_PX.toInt()
+            when (action.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> keyboardOverlay.nudgePosition(0, -step)
+                KeyEvent.KEYCODE_DPAD_DOWN -> keyboardOverlay.nudgePosition(0, step)
+                KeyEvent.KEYCODE_DPAD_LEFT -> keyboardOverlay.nudgePosition(-step, 0)
+                KeyEvent.KEYCODE_DPAD_RIGHT -> keyboardOverlay.nudgePosition(step, 0)
+                else -> Log.w(TAG, "keyCode=${action.keyCode} has no public injection path; ignoring")
+            }
+            return
+        }
         when (action.keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> cursorOverlay.applyDelta(0f, -CURSOR_STEP_PX)
             KeyEvent.KEYCODE_DPAD_DOWN -> cursorOverlay.applyDelta(0f, CURSOR_STEP_PX)
@@ -334,73 +366,125 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * ⧉ (Select/View) — opens AI Controller's own [com.ai.controller.keyboard.AIInputMethodService]
-     * overlay keyboard, not a fullscreen Activity (Android 15 blocks background
-     * activity launches from an AccessibilityService with no foreground gesture
-     * anyway, which is why the old KeyboardActivity launch here was silently dead)
-     * and not Gboard (the point of this IME is the emoji-skin-tone/text-style/pin
-     * keyboard, which only the custom IME provides).
+     * ⧉ (Select/View) — toggles [FloatingKeyboardOverlay], AI Controller's own
+     * emoji-skin-tone/text-style/pin keyboard, drawn directly by this service via
+     * WindowManager (same mechanism as [CursorOverlay]/[LegendOverlay]).
+     *
+     * This used to route through [com.ai.controller.keyboard.AIInputMethodService]
+     * (a real system IME) via `switchToInputMethod()` + `setShowMode()`. Live-tested
+     * 2026-09-18: both calls reported success, but `dumpsys input_method`'s
+     * `mInputShown` stayed false except for one fleeting instance — the system
+     * never reliably surfaced that IME's input view even when fully bound. The
+     * overlay approach sidesteps that arbitration entirely: no OS "is a keyboard
+     * currently showing" state to fight, just a window this service adds and
+     * removes itself, on demand, every time.
      */
     private fun startCustomKeyboard() {
-        var switched = false
-        try {
-            switched = softKeyboardController.switchToInputMethod(ourImeId())
-        } catch (e: Exception) {
-            Log.w(TAG, "switchToInputMethod(AIInputMethodService) failed", e)
+        if (!keyboardOverlay.isShowing()) {
+            keyboardTypingTarget = findEditableTarget()
         }
-        if (switched) {
-            try {
-                softKeyboardController.setShowMode(2) // SHOW_MODE_VISIBLE
-            } catch (e: Exception) {
-                Log.w(TAG, "setShowMode failed", e)
-            }
-            nudgeFocusedFieldForIme()
-            showDebug("Kbd: AI Controller IME shown")
+        keyboardOverlay.toggle()
+        if (!keyboardOverlay.isShowing()) {
+            keyboardTypingTarget = null
         } else {
-            // switchToInputMethod only succeeds once the user has enabled the IME in
-            // system settings (Settings > System > Languages & input > On-screen
-            // keyboard) — there is no programmatic way around that first-time step.
-            // Surface the system picker so they can do it in one tap.
-            Log.w(TAG, "AI Controller IME not enabled yet — opening input method picker")
-            showDebug("Kbd: enable 'AI Controller' in the IME picker")
-            try {
-                val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-                imm.showInputMethodPicker()
-            } catch (e: Exception) {
-                Log.e(TAG, "showInputMethodPicker failed", e)
-            }
+            // The keyboard's own window was just added, which stacks it above the
+            // cursor (same overlay type, later add wins) — bring the cursor back on
+            // top so it's still visible/aimable over the keyboard, not buried under it.
+            cursorOverlay.raise()
         }
+        showDebug(if (keyboardOverlay.isShowing()) "Kbd: shown" else "Kbd: hidden")
     }
 
-    private fun ourImeId(): String = "$packageName/.keyboard.AIInputMethodService"
+    /**
+     * The window everything below should look for a target field in, instead of
+     * [rootInActiveWindow] (which "active" really just means "most recently touched," not
+     * "the real app"). Root cause of "keyboard doesn't emit text," found live 2026-09-18:
+     * this service permanently keeps a 1x1 [MotionCaptureView] focused system-wide (see
+     * [attachMotionCapture]/[startFocusWatchdog]) so controller button presses always
+     * reach it — but that same permanent focus means `rootInActiveWindow` almost always
+     * resolves to OUR OWN window, not whatever app the user is actually looking at.
+     * `windows` (available via `flagRetrieveInteractiveWindows`, already set) lists every
+     * currently visible window regardless of which one holds focus, so picking the first
+     * non-overlay window that isn't our own package reliably finds the real target.
+     */
+    private fun externalAppRoot(): AccessibilityNodeInfo? = externalAppRoots().firstOrNull()
 
-    /** setShowMode/switchToInputMethod alone can be a no-op when no field has IME
-     * focus — nudge the focused node's editor so the IME actually opens on it. */
-    private fun nudgeFocusedFieldForIme() {
-        try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            if (focused != null && focused.isEditable) {
-                focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "focus nudge for IME failed", e)
-        }
+    /**
+     * Every window that could hold the field being typed into, best candidate first.
+     * Reported live 2026-09-18 as "it doesn't print on every text box": the previous
+     * version looked only at TYPE_APPLICATION and took the *first* non-ours window the
+     * system happened to list, which misses dialogs/popups entirely and can land on a
+     * background app's window instead of the one on screen. Ordering here prefers the
+     * window the user is actually interacting with (active, then focused), and the
+     * callers fall through the list until a field is actually found.
+     */
+    private fun externalAppRoots(): List<AccessibilityNodeInfo> {
+        val candidates = windows?.filter { it.root != null && it.root?.packageName != packageName }
+            ?: return emptyList()
+        return candidates
+            .sortedWith(
+                compareByDescending<AccessibilityWindowInfo> { it.isActive }
+                    .thenByDescending { it.isFocused }
+                    .thenByDescending { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            )
+            .mapNotNull { it.root }
     }
 
-    private fun setSoftKeyboardMode(show: Boolean) {
-        try {
-            // SHOW_MODE_AUTO = 0, SHOW_MODE_HIDDEN = 1, SHOW_MODE_VISIBLE = 2
-            // Constants are not resolved by this build, so use raw ints.
-            val mode = if (show) 2 else 1
-            softKeyboardController.setShowMode(mode)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to toggle soft keyboard", e)
+    /** First focused editable field across the candidate windows, falling back to the
+     * first editable field found at all — some apps expose an editable node without ever
+     * marking it input-focused, which is the other half of "doesn't print on every box." */
+    private fun findEditableTarget(): AccessibilityNodeInfo? {
+        val roots = externalAppRoots()
+        roots.forEach { root ->
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { return it }
         }
+        roots.forEach { root ->
+            firstEditableNode(root)?.let { return it }
+        }
+        return null
     }
+
+    private fun firstEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable && node.isVisibleToUser) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            firstEditableNode(child)?.let { return it }
+        }
+        return null
+    }
+
+    /** The field text/backspace/delete/commit actions should target. While the floating
+     * keyboard is open, this is the node captured in [startCustomKeyboard] rather than a
+     * live lookup, since the overlay's own buttons keep re-touching our own window while
+     * typing — see that function and [externalAppRoot] for why a live lookup can't be
+     * trusted moment-to-moment. Everywhere else (voice dictation, controller TEXT_EDIT
+     * presses with no keyboard open) a fresh [externalAppRoot] lookup is correct and
+     * simpler, since nothing has changed since the last touch. */
+    /** Logs and returns null when there's no focused field, so a text action that does
+     * nothing says why instead of returning silently — the failure mode that hid the
+     * backspace/delete/enter breakage reported 2026-09-18. */
+    private fun typingTargetOrWarn(op: String): AccessibilityNodeInfo? {
+        val t = typingTarget()
+        if (t == null) Log.w(TAG, "$op: no focused text field (nothing to act on)")
+        return t
+    }
+
+    private fun typingTarget(): AccessibilityNodeInfo? =
+        if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing()) {
+            // Root cause of "only the last letter of a sentence survives," found live
+            // 2026-09-18: this node is captured once when the keyboard opens and reused
+            // for every keystroke in the session. AccessibilityNodeInfo.text is a
+            // snapshot, not a live view — without refresh(), every call here kept
+            // reading the ORIGINAL (often empty) text, so `current + ch` was really
+            // `"" + ch` every single time: each new letter silently overwrote the field
+            // instead of appending to it, not failing to type at all.
+            keyboardTypingTarget?.also { it.refresh() }
+        } else {
+            findEditableTarget()
+        }
 
     private fun moveAccessibilityFocus(forward: Boolean) {
-        rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { focused ->
+        typingTarget()?.let { focused ->
             val direction = if (forward) 2 else 1
             val next = focused.focusSearch(direction)
             next?.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -682,14 +766,25 @@ class ControllerAccessibilityService : AccessibilityService() {
         return json.optString("text", "").trim()
     }
 
-    /** Replaces the focused field's text — used for whole-utterance dictation drops. */
+    /** Replaces the focused field's text — used for whole-utterance dictation drops.
+     * Same [typingTarget] fix as typeCharacter/typeText below applies here: a raw
+     * `rootInActiveWindow` lookup almost always resolves to this service's own
+     * permanently-focused MotionCaptureView, not whatever app the user is dictating
+     * into — this was silently swallowing every voice transcript before the fix. */
     private fun injectText(text: String) {
         try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            val focused = typingTarget()
+                ?: externalAppRoot()?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
             if (focused != null) {
-                val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
-                focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                // Reported live 2026-09-19: "the STT prints whatever it wants — sometimes
+                // it reads it, sometimes it doesn't." This SET_TEXT call was replacing the
+                // field's entire content with only the new transcript — every other
+                // injection path here (typeCharacter/typeText/commitTextOnce) appends
+                // current text first; this one alone silently didn't, so a second dictation
+                // wiped out whatever the first one wrote instead of adding to it.
+                focused.refresh()
+                val current = focused.text?.toString().orEmpty()
+                injectFocusedText(focused, current + text)
             } else {
                 Log.w(TAG, "No focused node for text injection")
             }
@@ -702,7 +797,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * which types incrementally rather than dropping a whole utterance at once. */
     fun typeCharacter(ch: String) {
         try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val focused = typingTarget() ?: return
             val current = focused.text?.toString().orEmpty()
             injectFocusedText(focused, current + ch)
         } catch (e: Exception) {
@@ -714,7 +809,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * pinned-snippet buttons, so a multi-word pin doesn't cost one call per character. */
     fun typeText(text: String) {
         try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val focused = typingTarget() ?: return
             val current = focused.text?.toString().orEmpty()
             injectFocusedText(focused, current + text)
         } catch (e: Exception) {
@@ -725,7 +820,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     /** Removes the last character of the focused field's text — KeyboardActivity's backspace. */
     fun backspaceOnce() {
         try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val focused = typingTargetOrWarn("backspaceOnce") ?: return
             val current = focused.text?.toString().orEmpty()
             if (current.isEmpty()) return
             injectFocusedText(focused, current.dropLast(1))
@@ -743,7 +838,11 @@ class ControllerAccessibilityService : AccessibilityService() {
         when (action.textOp) {
             TextEditOp.BACKSPACE -> backspaceOnce()
             TextEditOp.DELETE_NEXT -> deleteNextOnce()
-            null -> action.textPayload?.let { payload -> commitTextOnce(payload) }
+            // A "\n" payload is the RS/Enter slot, not literal text to insert — route it
+            // through the real editor action (see pressEnter) so search/send/go actually fire.
+            null -> action.textPayload?.let { payload ->
+                if (payload == "\n") pressEnter() else commitTextOnce(payload)
+            }
         }
     }
 
@@ -752,7 +851,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * field's text so a mid-field caret is honored when available. */
     fun deleteNextOnce() {
         try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val focused = typingTargetOrWarn("deleteNextOnce") ?: return
             val current = focused.text?.toString().orEmpty()
             if (current.isEmpty()) return
             val sel = focused.textSelectionStart
@@ -771,7 +870,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     /** Commits [text] verbatim to the focused field at the cursor — the RS "Enter" slot. */
     fun commitTextOnce(text: String) {
         try {
-            val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
+            val focused = typingTargetOrWarn("commitTextOnce") ?: return
             val current = focused.text?.toString().orEmpty()
             val sel = if (focused.textSelectionStart in 0..current.length) focused.textSelectionStart else current.length
             injectFocusedText(focused, current.substring(0, sel) + text + current.substring(sel))
@@ -783,6 +882,33 @@ class ControllerAccessibilityService : AccessibilityService() {
     private fun injectFocusedText(node: AccessibilityNodeInfo, text: String) {
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /**
+     * The ⏎ key and the RS/Enter controller slot. Reported live 2026-09-18 as "enter
+     * doesn't work": it used to inject a literal "\n" character via SET_TEXT, which
+     * single-line fields (search boxes, chat composers, login forms — i.e. most of the
+     * places this keyboard gets used) silently strip instead of acting on. ACTION_IME_ENTER
+     * is the real "the user pressed the enter/search/send key" signal, so the field runs
+     * its actual editor action. Falls back to a newline for genuinely multi-line fields,
+     * which don't advertise IME_ENTER.
+     */
+    fun pressEnter() {
+        try {
+            val focused = typingTargetOrWarn("pressEnter") ?: return
+            val supportsImeEnter = focused.actionList.any {
+                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+            }
+            if (supportsImeEnter) {
+                val ok = focused.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+                Log.d(TAG, "pressEnter: ACTION_IME_ENTER returned $ok")
+                if (ok) return
+            }
+            Log.d(TAG, "pressEnter: falling back to newline (supportsImeEnter=$supportsImeEnter)")
+            typeCharacter("\n")
+        } catch (e: Exception) {
+            Log.e(TAG, "pressEnter failed", e)
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -874,7 +1000,34 @@ class ControllerAccessibilityService : AccessibilityService() {
         val (lx, ly) = driftCalibrator.correct(rawLx, rawLy)
         val (dx, dy) = inputMapper.applyDeadzoneAndSensitivity(lx, ly, profile.deadzone, profile.sensitivity)
         if (dx != 0f || dy != 0f) {
-            cursorOverlay.applyDelta(dx * CURSOR_SPEED_PX, dy * CURSOR_SPEED_PX)
+            // Reported live 2026-09-19: "I still cannot move the slide keyboard — I can't
+            // move it." The drag-mode redirect only existed on the D-pad path
+            // (handleKeyEventAction); this stick path — the one actually used to move the
+            // cursor, per every prior report — always drove the cursor regardless of
+            // FloatingKeyboardOverlay.isDragging(), so arming "Move" did nothing reachable.
+            if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() && keyboardOverlay.isDragging()) {
+                keyboardOverlay.nudgePosition((dx * CURSOR_SPEED_PX).toInt(), (dy * CURSOR_SPEED_PX).toInt())
+            } else {
+                cursorOverlay.applyDelta(dx * CURSOR_SPEED_PX, dy * CURSOR_SPEED_PX)
+            }
+        }
+
+        // D-pad → cursor nudge (or panel nudge while dragging), same as the stick above.
+        // Reported live 2026-09-19: "the directional buttons aren't working." This
+        // controller (confirmed via `dumpsys input`: real HAT_X/HAT_Y motion ranges on its
+        // device entry) reports the D-pad as hat-switch axis motion, not KEYCODE_DPAD_*
+        // key events — the only path handleKeyEventAction's D-pad case ever listened on.
+        // No KeyEvent means onKeyEvent/onKeyDown never fire for this control at all on this
+        // hardware; reading it here, alongside the sticks it shares a motion event with, is
+        // the actual signal this controller sends.
+        val hatX = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_X)
+        val hatY = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_Y)
+        if (hatX != 0f || hatY != 0f) {
+            if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() && keyboardOverlay.isDragging()) {
+                keyboardOverlay.nudgePosition((hatX * CURSOR_SPEED_PX).toInt(), (hatY * CURSOR_SPEED_PX).toInt())
+            } else {
+                cursorOverlay.applyDelta(hatX * CURSOR_SPEED_PX, hatY * CURSOR_SPEED_PX)
+            }
         }
 
         // Right stick → scroll from cursor position.
@@ -964,10 +1117,25 @@ class ControllerAccessibilityService : AccessibilityService() {
     // Gesture dispatch
     // ---------------------------------------------------------------------
 
+    /** Callback intentionally logs, never acts — this exists purely to answer "does the
+     * framework actually deliver this gesture," reported live 2026-09-18 as "the A button
+     * only works every once in a while." dispatchGesture() was called with a null callback
+     * everywhere in this file, so there was no way to tell a dropped/cancelled gesture apart
+     * from one that reached the target and simply didn't do anything there. */
+    private val tapResultCallback = object : GestureResultCallback() {
+        override fun onCompleted(gestureDescription: GestureDescription?) {
+            Log.d(TAG, "dispatchTap: gesture completed")
+        }
+        override fun onCancelled(gestureDescription: GestureDescription?) {
+            Log.w(TAG, "dispatchTap: gesture CANCELLED by framework")
+        }
+    }
+
     private fun dispatchTap(point: PointF) {
         val path = Path().apply { moveTo(point.x, point.y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), tapResultCallback, null)
+        Log.d(TAG, "dispatchTap at (${point.x}, ${point.y}): dispatchGesture() accepted=$dispatched")
     }
 
     private fun dispatchLongPress(point: PointF, durationMs: Long) {

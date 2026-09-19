@@ -124,6 +124,31 @@ class CursorOverlay(private val context: Context) {
         layoutParams = null
     }
 
+    /** Re-adds the same view (position/state untouched) so it stacks above whatever
+     * else has been added to the window manager since — same-type overlay windows
+     * layer in add order, so a window added after this one (e.g. the on-screen
+     * keyboard) otherwise buries the cursor with no visual sign it still exists. */
+    fun raise() {
+        if (!attached) return
+        val view = cursorView ?: return
+        val params = layoutParams ?: return
+        try {
+            windowManager.removeView(view)
+            windowManager.addView(view, params)
+        } catch (e: Exception) {
+            // OCR finding: was IllegalArgumentException only, but removeView() can throw
+            // IllegalStateException (view not attached) and addView() can throw
+            // WindowManager.BadTokenException — this runs every time the keyboard opens
+            // (startCustomKeyboard calls it unconditionally), so an uncaught instance of
+            // either would crash the whole accessibility service on essentially any
+            // keyboard-open press, not just this one call.
+            attached = false
+            cursorView = null
+            layoutParams = null
+            Log.w(TAG, "raise failed, cursor overlay detached", e)
+        }
+    }
+
     /** Nudges the movement target by a stick-derived delta, in pixels per tick. */
     fun applyDelta(dx: Float, dy: Float) {
         if (!attached) return

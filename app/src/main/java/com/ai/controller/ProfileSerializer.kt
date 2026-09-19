@@ -18,8 +18,16 @@ object ProfileSerializer {
 
     /** Current profile revision. rev 2 = desktop-parity mappings (labels match the
      * AntiMicroX legend); anything written before rev existed is a legacy profile
-     * whose mappings came from the old invented defaults, not real intent. */
-    private const val REV = 2
+     * whose mappings came from the old invented defaults, not real intent.
+     *
+     * rev 3, 2026-09-19: a rev-2 profile stored before RS/Enter had a real mapping
+     * serialized `textPayload: null` for BUTTON_THUMBR (accurate at the time — Enter
+     * wasn't wired to anything yet). Combined with the `optString()`-with-no-default
+     * bug fixed below (which turned that JSON null into the literal string "null" on
+     * read, since `\n` != "null"), RS silently did nothing — reported live as "I still
+     * can't press enter." Bumping rev forces every on-device profile back through
+     * default(), where BUTTON_THUMBR carries its real "\n" payload again. */
+    private const val REV = 3
 
     fun serialize(profile: ControllerProfile): JSONObject {
         val root = JSONObject()
@@ -78,13 +86,21 @@ object ProfileSerializer {
                 val actionJson = mappingsJson.getJSONObject(key)
                 val type = runCatching { ActionType.valueOf(actionJson.getString("type")) }
                     .getOrDefault(ActionType.NONE)
-                val swipeDirection = actionJson.optString("swipeDirection").takeIf { it.isNotBlank() }?.let { dir ->
+                // optString(key) — the no-default overload — returns the literal string
+                // "null" for a missing/JSONObject.NULL value, not an empty string or real
+                // null. For an enum lookup (swipeDirection/textOp below) that's harmless:
+                // SwipeDirection.valueOf("null") throws and runCatching swallows it. For a
+                // raw string field (textPayload) there's no such enum gate — "null" passed
+                // straight through as if it were real text. Root cause of "can't press
+                // enter," live 2026-09-19: see the rev-3 note above. Explicit "" defaults
+                // throughout so a missing value reads as missing everywhere, consistently.
+                val swipeDirection = actionJson.optString("swipeDirection", "").takeIf { it.isNotBlank() }?.let { dir ->
                     runCatching { SwipeDirection.valueOf(dir) }.getOrNull()
                 }
-                val textOp = actionJson.optString("textOp").takeIf { it.isNotBlank() }?.let { op ->
+                val textOp = actionJson.optString("textOp", "").takeIf { it.isNotBlank() }?.let { op ->
                     runCatching { TextEditOp.valueOf(op) }.getOrNull()
                 }
-                val textPayload = actionJson.optString("textPayload").takeIf { it.isNotBlank() }
+                val textPayload = actionJson.optString("textPayload", "").takeIf { it.isNotBlank() }
                 mappings[input] = ButtonAction(
                     type = type,
                     label = actionJson.optString("label", ""),

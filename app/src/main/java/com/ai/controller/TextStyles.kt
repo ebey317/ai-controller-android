@@ -264,3 +264,32 @@ object SkinToneStore {
             .apply()
     }
 }
+
+/**
+ * User-adjustable keyboard text size. Reported live 2026-09-19: a fixed size ("this one
+ * needs an increased font size") isn't the fix — "we need to be able to allow the
+ * consumer to choose the size that they want... it doesn't need to be predetermined."
+ * Persisted like the other keyboard prefs (mode, skin tone) so it survives show/hide and
+ * app restarts. [STEPS_SP] are the discrete sizes the on-screen +/- cycles through; [next]
+ * saturates at the ends rather than wrapping, since "keep pressing +" landing back at tiny
+ * text would feel broken.
+ */
+object KeyboardFontSizeStore {
+    private const val PREFS_NAME = "ai_controller_keyboard"
+    private const val KEY_SIZE_SP = "font_size_sp"
+    const val DEFAULT_SP = 18f
+    val STEPS_SP = listOf(14f, 18f, 22f, 26f, 30f, 34f)
+
+    fun load(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getFloat(KEY_SIZE_SP, DEFAULT_SP)
+
+    fun save(context: Context, sizeSp: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_SIZE_SP, sizeSp)
+            .apply()
+    }
+
+    fun larger(current: Float): Float = STEPS_SP.lastOrNull { it > current } ?: STEPS_SP.max()
+    fun smaller(current: Float): Float = STEPS_SP.firstOrNull { it < current } ?: STEPS_SP.min()
+}
