@@ -7,6 +7,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -43,6 +44,7 @@ class AIInputMethodService : InputMethodService() {
     private var cachedMode: TextStyles.Mode = TextStyles.Mode.PRO
     private var fontSizeSp: Float = KeyboardFontSizeStore.DEFAULT_SP
     private var allButtons: MutableList<Button> = mutableListOf()
+    private var currentEditorInfo: android.view.inputmethod.EditorInfo? = null
 
     private val rowsLower = listOf(
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
@@ -242,7 +244,16 @@ class AIInputMethodService : InputMethodService() {
             setOnClickListener { currentInputConnection?.deleteSurroundingText(1, 0) }
         })
         row.addView(styledButton("⏎").apply {
-            setOnClickListener { currentInputConnection?.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE) }
+            setOnClickListener {
+                val ic = currentInputConnection ?: return@setOnClickListener
+                val ei = currentEditorInfo
+                val actionId = ei?.let { it.imeOptions and EditorInfo.IME_MASK_ACTION } ?: EditorInfo.IME_ACTION_DONE
+                val supportsAction = actionId != EditorInfo.IME_ACTION_NONE && actionId != EditorInfo.IME_ACTION_UNSPECIFIED
+                if (supportsAction && ic.performEditorAction(actionId)) {
+                    return@setOnClickListener
+                }
+                ic.commitText("\n", 1)
+            }
         })
         row.addView(voiceButton())
         return row
@@ -274,6 +285,7 @@ class AIInputMethodService : InputMethodService() {
     override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         Log.d("AIInputMethodService", "onStartInputView restarting=$restarting")
+        currentEditorInfo = info
         cachedMode = PttModeStore.load(this)
         refreshPinsRow()
     }
