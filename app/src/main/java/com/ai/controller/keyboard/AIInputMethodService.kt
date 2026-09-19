@@ -40,6 +40,7 @@ class AIInputMethodService : InputMethodService() {
     private lateinit var keyGrid: GridLayout
     private lateinit var pinsRow: LinearLayout
     private lateinit var styleButtons: Map<TextStyles.Mode, Button>
+    private var cachedMode: TextStyles.Mode = TextStyles.Mode.PRO
 
     private val rowsLower = listOf(
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
@@ -73,14 +74,6 @@ class AIInputMethodService : InputMethodService() {
         return root
     }
 
-    override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
-        super.onStartInputView(info, restarting)
-        Log.d("AIInputMethodService", "onStartInputView restarting=$restarting")
-        refreshPinsRow()
-    }
-
-    override fun onEvaluateInputViewShown(): Boolean = true
-
     override fun onWindowShown() {
         super.onWindowShown()
         Log.d("AIInputMethodService", "onWindowShown")
@@ -93,6 +86,7 @@ class AIInputMethodService : InputMethodService() {
             val btn = styledButton(styleLabel(mode)).apply {
                 setOnClickListener {
                     PttModeStore.save(this@AIInputMethodService, mode)
+                    cachedMode = mode
                     refreshStyleButtons()
                 }
             }
@@ -116,7 +110,7 @@ class AIInputMethodService : InputMethodService() {
     }
 
     private fun refreshStyleButtons() {
-        val active = PttModeStore.load(this)
+        val active = cachedMode
         for ((mode, btn) in styleButtons) {
             btn.setBackgroundColor(Color.parseColor(if (mode == active) "#3DDC97" else "#23232B"))
             btn.setTextColor(Color.parseColor(if (mode == active) "#0D0D12" else "#E8E8E8"))
@@ -244,7 +238,14 @@ class AIInputMethodService : InputMethodService() {
 
     // ── Styled commit helpers ────────────────────────────────────────────
 
-    private fun currentMode(): TextStyles.Mode = PttModeStore.load(this)
+    override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
+        super.onStartInputView(info, restarting)
+        Log.d("AIInputMethodService", "onStartInputView restarting=$restarting")
+        cachedMode = PttModeStore.load(this)
+        refreshPinsRow()
+    }
+
+    private fun currentMode(): TextStyles.Mode = cachedMode
 
     private fun commitStyledChar(ch: String) {
         val ic = currentInputConnection ?: return

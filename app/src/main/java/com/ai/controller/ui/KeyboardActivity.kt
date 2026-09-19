@@ -120,7 +120,9 @@ class KeyboardActivity : AppCompatActivity() {
             val label = pin.optString("label", "?").take(10)
             val btn = pinButton(label).apply {
                 setOnClickListener {
-                    ControllerAccessibilityService.instance?.typeText(pin.optString("text", ""))
+                    val text = pin.optString("text", "")
+                    val styled = TextStyles.transform(text, cachedMode)
+                    ControllerAccessibilityService.instance?.typeText(styled)
                 }
                 setOnLongClickListener {
                     PinStore.removeAt(this@KeyboardActivity, index)
@@ -204,7 +206,7 @@ class KeyboardActivity : AppCompatActivity() {
             setOnClickListener { ControllerAccessibilityService.instance?.backspaceOnce() }
         })
         row.addView(styledButton("⏎").apply {
-            setOnClickListener { ControllerAccessibilityService.instance?.typeCharacter("\n") }
+            setOnClickListener { ControllerAccessibilityService.instance?.pressEnter() }
         })
         return row
     }
