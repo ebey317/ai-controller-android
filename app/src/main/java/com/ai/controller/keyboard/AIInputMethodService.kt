@@ -8,7 +8,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.GridLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
@@ -38,7 +37,7 @@ import com.ai.controller.TextStyles
 class AIInputMethodService : InputMethodService() {
 
     private var shiftOn = false
-    private lateinit var keyGrid: GridLayout
+    private lateinit var keyGrid: LinearLayout
     private lateinit var pinsRow: LinearLayout
     private lateinit var styleButtons: Map<TextStyles.Mode, Button>
     private var cachedMode: TextStyles.Mode = TextStyles.Mode.PRO
@@ -50,6 +49,8 @@ class AIInputMethodService : InputMethodService() {
         listOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
         listOf("z", "x", "c", "v", "b", "n", "m")
     )
+
+    private val punctuationRow = listOf(",", ".", "?", "!", "'", "-", "/", ":", ";", "@")
 
     override fun onCreate() {
         super.onCreate()
@@ -187,22 +188,23 @@ class AIInputMethodService : InputMethodService() {
 
     // ── QWERTY grid ──────────────────────────────────────────────────────
 
-    private fun buildKeyGrid(): GridLayout {
-        val grid = GridLayout(this).apply {
-            columnCount = 10
+    private fun buildKeyGrid(): LinearLayout {
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         populateKeyGrid(grid)
         return grid
     }
 
-    private fun populateKeyGrid(grid: GridLayout) {
+    private fun populateKeyGrid(grid: LinearLayout) {
         grid.removeAllViews()
         for (row in rowsLower) {
+            val rowView = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (key in row) {
                 val label = if (shiftOn) key.uppercase() else key
-                grid.addView(styledButton(label).apply {
-                    layoutParams = GridLayout.LayoutParams().apply { width = 80; height = 80 }
+                rowView.addView(styledButton(label).apply {
+                    layoutParams = LinearLayout.LayoutParams(80, 80)
                     setOnClickListener {
                         commitStyledChar(label)
                         if (shiftOn) {
@@ -212,7 +214,16 @@ class AIInputMethodService : InputMethodService() {
                     }
                 })
             }
+            grid.addView(rowView)
         }
+        val punctRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (symbol in punctuationRow) {
+            punctRow.addView(styledButton(symbol).apply {
+                layoutParams = LinearLayout.LayoutParams(80, 80)
+                setOnClickListener { commitStyledChar(symbol) }
+            })
+        }
+        grid.addView(punctRow)
     }
 
     private fun buildBottomRow(): LinearLayout {
@@ -231,7 +242,7 @@ class AIInputMethodService : InputMethodService() {
             setOnClickListener { currentInputConnection?.deleteSurroundingText(1, 0) }
         })
         row.addView(styledButton("⏎").apply {
-            setOnClickListener { ControllerAccessibilityService.instance?.pressEnter() }
+            setOnClickListener { currentInputConnection?.performEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_DONE) }
         })
         row.addView(voiceButton())
         return row

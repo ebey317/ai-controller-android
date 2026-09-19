@@ -8,7 +8,6 @@ import android.view.Gravity
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
-import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -37,7 +36,7 @@ class KeyboardActivity : AppCompatActivity() {
     private lateinit var pinsRow: LinearLayout
     private lateinit var modeButton: Button
     private var shiftOn = false
-    private lateinit var keyGrid: GridLayout
+    private lateinit var keyGrid: LinearLayout
     private var cachedMode: TextStyles.Mode = TextStyles.Mode.PRO
 
     private val rowsLower = listOf(
@@ -45,6 +44,8 @@ class KeyboardActivity : AppCompatActivity() {
         listOf("a", "s", "d", "f", "g", "h", "j", "k", "l"),
         listOf("z", "x", "c", "v", "b", "n", "m")
     )
+
+    private val punctuationRow = listOf(",", ".", "?", "!", "'", "-", "/", ":", ";", "@")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -158,22 +159,23 @@ class KeyboardActivity : AppCompatActivity() {
 
     // ── QWERTY key grid ──────────────────────────────────────────────────
 
-    private fun buildKeyGrid(): GridLayout {
-        val grid = GridLayout(this).apply {
-            columnCount = 10
+    private fun buildKeyGrid(): LinearLayout {
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         populateKeyGrid(grid)
         return grid
     }
 
-    private fun populateKeyGrid(grid: GridLayout) {
+    private fun populateKeyGrid(grid: LinearLayout) {
         grid.removeAllViews()
         for (row in rowsLower) {
+            val rowView = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (key in row) {
                 val label = if (shiftOn) key.uppercase() else key
-                grid.addView(styledButton(label).apply {
-                    layoutParams = GridLayout.LayoutParams().apply { width = 90; height = 90 }
+                rowView.addView(styledButton(label).apply {
+                    layoutParams = LinearLayout.LayoutParams(90, 90)
                     setOnClickListener {
                         commitStyledChar(label)
                         if (shiftOn) {
@@ -183,7 +185,16 @@ class KeyboardActivity : AppCompatActivity() {
                     }
                 })
             }
+            grid.addView(rowView)
         }
+        val punctRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (symbol in punctuationRow) {
+            punctRow.addView(styledButton(symbol).apply {
+                layoutParams = LinearLayout.LayoutParams(90, 90)
+                setOnClickListener { commitStyledChar(symbol) }
+            })
+        }
+        grid.addView(punctRow)
     }
 
     private fun buildBottomRow(): LinearLayout {

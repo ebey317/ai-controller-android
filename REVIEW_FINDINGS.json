@@ -1,72 +1,72 @@
 {
   "findings": [
     {
-      "id": "F1",
-      "severity": "warning",
+      "id": "R1",
+      "severity": "error",
       "file": "app/src/main/java/com/ai/controller/keyboard/AIInputMethodService.kt",
-      "line": 212,
-      "description": "Enter key in AIInputMethodService calls `currentInputConnection?.commitText(\"\\n\", 1)` (line 212), injecting a literal newline. FloatingKeyboardOverlay (line 450) and KeyboardActivity (line 209) both call `service.pressEnter()` which first tries ACTION_IME_ENTER (triggering search/send/go on single-line fields) and only falls back to newline. The IME path won't submit forms/searches on single-line fields.",
+      "line": 190,
+      "description": "AIInputMethodService uses GridLayout with columnCount=10 for the QWERTY grid (lines 190-216), pouring all three letter rows into a single grid. FloatingKeyboardOverlay explicitly fixed this bug (lines 384-388): 'The previous version poured all three rows into a single 10-column GridLayout, which silently wrapped \"z\" onto the end of the middle row'. The fix was to use LinearLayout rows (one per letter row). Since AIInputMethodService is a registered system IME (AndroidManifest.xml line 62-73) that users can select as their keyboard, this wrapping bug is in reachable, user-facing code.",
       "action": "auto-fix",
       "review_scope": "source"
     },
     {
-      "id": "F2",
-      "severity": "info",
-      "file": "app/src/main/java/com/ai/controller/keyboard/AIInputMethodService.kt",
-      "line": 1,
-      "description": "AIInputMethodService lacks user-adjustable font size (A+/A- buttons and KeyboardFontSizeStore integration) that FloatingKeyboardOverlay has (lines 244-262 in FloatingKeyboardOverlay.kt). The user intent explicitly requested font size to be user-adjustable. Since AIInputMethodService is a registered IME users can switch to, it should offer the same customization.",
+      "id": "R2",
+      "severity": "error",
+      "file": "app/src/main/java/com/ai/controller/ui/KeyboardActivity.kt",
+      "line": 161,
+      "description": "KeyboardActivity uses GridLayout with columnCount=10 for the QWERTY grid (lines 161-187), identical to the bug Fixed in FloatingKeyboardOverlay. All three letter rows are poured into one grid, causing 'z' to wrap onto the middle row. KeyboardActivity is a launchable activity (AndroidManifest.xml line 41-47) and can be started from within the app. This is the same reachable bug as R1.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "R3",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/ui/KeyboardActivity.kt",
+      "line": 75,
+      "description": "KeyboardActivity lacks font size controls (A+/A- buttons with KeyboardFontSizeStore integration) that FloatingKeyboardOverlay (lines 240-262) and AIInputMethodService (lines 90-102) both have. User intent explicitly requested: 'font size to be user-adjustable rather than a fixed value'. KeyboardActivity also lacks: punctuation row (FloatingKeyboardOverlay line 70), skin tone picker (🎨 button), and a voice button despite buildModeAndVoiceRow() name implying one. The voice button is present in both other keyboards (FloatingKeyboardOverlay line 466, AIInputMethodService line 244).",
       "action": "ask-user",
       "review_scope": "source"
     },
     {
-      "id": "F3",
+      "id": "R4",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/keyboard/AIInputMethodService.kt",
+      "line": 234,
+      "description": "AIInputMethodService's Enter key (line 234) calls ControllerAccessibilityService.instance?.pressEnter() which uses AccessibilityNodeInfo to find and act on the focused field. As a registered InputMethodService, it has direct access to currentInputConnection and should handle Enter via performEditorAction() or sendKeyEvent() on its own InputConnection. Delegating to the accessibility service is architecturally wrong and may fail when the IME is active because the service's typingTarget() logic filters by package name and may not correctly resolve the IME's target field.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "R5",
+      "severity": "info",
+      "file": "app/src/main/java/com/ai/controller/TextStyles.kt",
+      "line": 319,
+      "description": "styleLabel() logic is duplicated in FloatingKeyboardOverlay (line 319), AIInputMethodService (line 126), and KeyboardActivity (line 88) with identical implementations. commitStyledChar() per-character styling logic is also triplicated across all three keyboards (FloatingKeyboardOverlay line 488, AIInputMethodService line 272, KeyboardActivity line 216). Previously identified as F6. Violates DRY and creates maintenance risk when style behavior changes.",
+      "action": "ask-user",
+      "review_scope": "source"
+    },
+    {
+      "id": "R6",
       "severity": "info",
       "file": "app/src/main/java/com/ai/controller/VoiceBridgeServer.kt",
       "line": 46,
-      "description": "VoiceBridgeServer generates a per-instance authToken (line 46) but this token is never exposed to any client. The server is started in ControllerAccessibilityService.onServiceConnected() (line 174-177) but the token is not logged, stored, or shared. If this endpoint is intended for local testing/debugging, there's no way for a legitimate client to authenticate. If it's only for internal future use, this is acceptable but should be documented.",
+      "description": "VoiceBridgeServer generates a per-instance authToken (line 46) but this token is never exposed to any client. The server is started in ControllerAccessibilityService.onServiceConnected() (line 174-177) but the token is not logged, stored, or shared. The comment states 'Give this only to the trusted in-process caller' but there's no mechanism to pass it to a caller. Previously identified as F3. If this endpoint is intended for local testing/debugging, there's no way for a legitimate client to authenticate.",
       "action": "ask-user",
       "review_scope": "source"
     },
     {
-      "id": "F4",
-      "severity": "warning",
+      "id": "R7",
+      "severity": "info",
       "file": "app/src/main/java/com/ai/controller/ProfileSerializer.kt",
       "line": 70,
-      "description": "REV=3 migration (lines 70-78) discards ALL user-customized button mappings from legacy profiles (rev < 3), keeping only tuning values (sensitivity/deadzone/cursor/invert). This is a breaking data-loss change for existing users. User acknowledged as acceptable for AntiMicroX parity in prior review, but should be explicitly documented in release notes.",
+      "description": "REV=3 migration (lines 70-78) discards ALL user-customized button mappings from legacy profiles (rev < 3), keeping only tuning values (sensitivity/deadzone/cursorEnabled/invertScroll). This is a breaking data-loss change for existing users. Previously identified as R4/F4. User acknowledged as acceptable for AntiMicroX parity, but should be explicitly documented in release notes.",
       "action": "ask-user",
-      "review_scope": "source"
-    },
-    {
-      "id": "F5",
-      "severity": "warning",
-      "file": "app/src/main/java/com/ai/controller/FloatingKeyboardOverlay.kt",
-      "line": 191,
-      "description": "nudgePosition() clamps using `view.width` and `view.height` (lines 191-192) which are 0 before the first layout pass. If a controller sends stick/hat motion while dragging=true immediately after show() but before layout completes, the keyboard could be clamped to (0,0) or behave unexpectedly. The view is added in show() but layout is asynchronous.",
-      "action": "auto-fix",
-      "review_scope": "source"
-    },
-    {
-      "id": "F6",
-      "severity": "info",
-      "file": "app/src/main/java/com/ai/controller/TextStyles.kt",
-      "line": 309,
-      "description": "styleLabel() logic is duplicated in FloatingKeyboardOverlay (line 309), AIInputMethodService (line 104), and KeyboardActivity has modeLabel() (line 88) with identical implementations. commitStyledChar() per-character styling logic is also triplicated across all three keyboards. This violates DRY and creates maintenance risk when style behavior changes.",
-      "action": "ask-user",
-      "review_scope": "source"
-    },
-    {
-      "id": "F7",
-      "severity": "info",
-      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
-      "line": 174,
-      "description": "VoiceBridgeServer is instantiated and started in onServiceConnected() (lines 174-177), contrary to prior finding F5 which claimed it wasn't started. The prior finding was incorrect — the code exists and is reachable.",
-      "action": "no-op",
       "review_scope": "source"
     }
   ],
   "tested": [],
-  "testing_summary": "Code compiles successfully (./gradlew compileDebugKotlin). No tests exist in this port yet per AGENTS.md. Manual verification of all user-intent fixes: text accumulation (typingTarget.refresh), D-pad/hat input, RS/Enter (ProfileSerializer rev3 + pressEnter), voice dictation append (injectText refresh+append), drag-to-reposition (handleGenericMotion + nudgePosition clamp), font size adjustment (KeyboardFontSizeStore + A+/A-), style labels (styleLabel rendered names), no emoji picker (skin tone picker only, which is different).",
+  "testing_summary": "Reviewed source code changes against user intent and prior review rounds. Verified build compiles successfully (./gradlew compileDebugKotlin). No tests exist in this port yet per AGENTS.md. Analyzed all three keyboard implementations, voice pipeline, profile migration, and text styling logic for conformance with stated requirements.",
   "risk_level": "medium",
-  "risk_rationale": "Core user-intent bugs are fixed (text overwriting, D-pad not working, Enter not working, voice overwrite, drag off-screen). Remaining issues are: (1) AIInputMethodService Enter key behavior differs from other keyboards (auto-fixable), (2) font size not adjustable in IME (needs user decision), (3) VoiceBridgeServer auth token inaccessible (needs user decision on purpose), (4) ProfileSerializer rev3 migration is breaking but user-accepted, (5) potential race in nudgePosition clamping (auto-fixable), (6) code duplication across three keyboards (maintenance risk).",
+  "risk_rationale": "Two critical GridLayout wrapping bugs (R1, R2) affect reachable user-facing keyboards (system IME and launchable Activity). KeyboardActivity lacks multiple user-requested features (font size, punctuation, voice). AIInputMethodService has an architectural flaw in Enter handling. These are concrete, verifiable defects in the changed code. The remaining info findings are pre-existing technical debt acknowledged by the user.",
   "risk_scope": "source-or-external"
 }
