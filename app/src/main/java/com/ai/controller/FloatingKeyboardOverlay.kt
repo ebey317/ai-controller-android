@@ -188,10 +188,20 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
         // past what's on screen. Toggling the keyboard off/on didn't "fix" the position —
         // show() just re-renders at whatever x/y already is, which happened to look right
         // because the clamp starts fresh each time rather than compounding drift.
-        val maxX = (metrics.widthPixels - view.width).coerceAtLeast(0)
-        val maxY = (metrics.heightPixels - view.height).coerceAtLeast(0)
-        params.x = (params.x + dx).coerceIn(0, maxX)
-        params.y = (params.y + dy).coerceIn(0, maxY)
+        // Guard: view.width/height are 0 before first layout pass. Use measured size
+        // as fallback; if both are 0, skip clamping (allow move, clamp on next call).
+        val viewW = view.width.takeIf { it > 0 } ?: view.measuredWidth.takeIf { it > 0 }
+        val viewH = view.height.takeIf { it > 0 } ?: view.measuredHeight.takeIf { it > 0 }
+        if (viewW == null || viewH == null) {
+            // Layout not ready yet; apply raw nudge without clamping.
+            params.x += dx
+            params.y += dy
+        } else {
+            val maxX = (metrics.widthPixels - viewW).coerceAtLeast(0)
+            val maxY = (metrics.heightPixels - viewH).coerceAtLeast(0)
+            params.x = (params.x + dx).coerceIn(0, maxX)
+            params.y = (params.y + dy).coerceIn(0, maxY)
+        }
         try {
             windowManager.updateViewLayout(view, params)
         } catch (e: Exception) {

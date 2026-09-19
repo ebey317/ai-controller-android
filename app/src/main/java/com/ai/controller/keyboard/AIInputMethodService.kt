@@ -14,6 +14,7 @@ import android.widget.LinearLayout
 import android.widget.PopupWindow
 import com.ai.controller.ControllerAccessibilityService
 import com.ai.controller.EmojiSkinTone
+import com.ai.controller.KeyboardFontSizeStore
 import com.ai.controller.PinStore
 import com.ai.controller.PttModeStore
 import com.ai.controller.SkinToneStore
@@ -41,6 +42,8 @@ class AIInputMethodService : InputMethodService() {
     private lateinit var pinsRow: LinearLayout
     private lateinit var styleButtons: Map<TextStyles.Mode, Button>
     private var cachedMode: TextStyles.Mode = TextStyles.Mode.PRO
+    private var fontSizeSp: Float = KeyboardFontSizeStore.DEFAULT_SP
+    private var allButtons: MutableList<Button> = mutableListOf()
 
     private val rowsLower = listOf(
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
@@ -57,6 +60,9 @@ class AIInputMethodService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         Log.d("AIInputMethodService", "onCreateInputView")
+        cachedMode = PttModeStore.load(this)
+        fontSizeSp = KeyboardFontSizeStore.load(this)
+        allButtons.clear()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#0D0D12"))
@@ -64,8 +70,10 @@ class AIInputMethodService : InputMethodService() {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
+        root.addView(buildFontSizeRow())
         root.addView(buildStyleAndToneRow())
         pinsRow = buildPinsRow()
+        refreshPinsRow()
         root.addView(pinsRow)
         keyGrid = buildKeyGrid()
         root.addView(keyGrid)
@@ -77,6 +85,20 @@ class AIInputMethodService : InputMethodService() {
     override fun onWindowShown() {
         super.onWindowShown()
         Log.d("AIInputMethodService", "onWindowShown")
+    }
+
+    private fun buildFontSizeRow(): LinearLayout {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row.setPadding(0, 0, 0, 16)
+        row.addView(styledButton("A-").apply {
+            setBackgroundColor(Color.parseColor("#1A1A22"))
+            setOnClickListener { changeFontSize(KeyboardFontSizeStore.smaller(fontSizeSp)) }
+        })
+        row.addView(styledButton("A+").apply {
+            setBackgroundColor(Color.parseColor("#1A1A22"))
+            setOnClickListener { changeFontSize(KeyboardFontSizeStore.larger(fontSizeSp)) }
+        })
+        return row
     }
 
     private fun buildStyleAndToneRow(): HorizontalScrollView {
@@ -209,7 +231,7 @@ class AIInputMethodService : InputMethodService() {
             setOnClickListener { currentInputConnection?.deleteSurroundingText(1, 0) }
         })
         row.addView(styledButton("⏎").apply {
-            setOnClickListener { currentInputConnection?.commitText("\n", 1) }
+            setOnClickListener { ControllerAccessibilityService.instance?.pressEnter() }
         })
         row.addView(voiceButton())
         return row
@@ -265,6 +287,15 @@ class AIInputMethodService : InputMethodService() {
         currentInputConnection?.commitText(TextStyles.transform(text, currentMode()), 1)
     }
 
+    private fun changeFontSize(sp: Float) {
+        if (sp == fontSizeSp) return
+        fontSizeSp = sp
+        KeyboardFontSizeStore.save(this, sp)
+        for (btn in allButtons) {
+            btn.textSize = sp
+        }
+    }
+
     // ── Shared styling ───────────────────────────────────────────────────
 
     private fun styledButton(label: String): Button = Button(this).apply {
@@ -273,6 +304,8 @@ class AIInputMethodService : InputMethodService() {
         setBackgroundColor(Color.parseColor("#23232B"))
         setPadding(10, 10, 10, 10)
         isAllCaps = false
+        textSize = fontSizeSp
+        allButtons.add(this)
     }
 
     private fun pinButton(label: String): Button = styledButton(label).apply {
