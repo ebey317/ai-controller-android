@@ -54,13 +54,18 @@ companion device — everything routes through public
 
 - **Left stick** — move the cursor. **A** — tap. **B/X** — back. **Y** —
   recents. **LB** — scroll up. **RB** — long-press. **RT** — hold to talk,
-  release to transcribe and type. **View/Back** — toggle the system
-  keyboard. **Start** — move accessibility focus.
+  release to transcribe and type. **Select/View (⧉)** — toggle the floating
+  on-screen keyboard. **Start** — move accessibility focus. **Right-stick
+  click (RS)** — Enter/submit in the focused field.
 - **Edit Button Mappings** (in the app) rebinds any input to any action,
   including the new `CYCLE_CONTEXT` action (see below).
-- **Open Custom Keyboard** launches [`KeyboardActivity`](app/src/main/java/com/ai/controller/ui/KeyboardActivity.kt) — a
-  floating on-screen QWERTY grid with a PRO/BUBBLY/CASUAL/BOLD/BIG text-style
-  toggle and 5 pinned-snippet slots, the Android analogue of
+- **Open Custom Keyboard** (in the app) launches [`KeyboardActivity`](app/src/main/java/com/ai/controller/ui/KeyboardActivity.kt) — a
+  full-screen diagnostic keyboard. The primary on-screen keyboard is the
+  floating [`FloatingKeyboardOverlay`](app/src/main/java/com/ai/controller/FloatingKeyboardOverlay.kt),
+  toggled by the **Select/View (⧉)** button on the controller — a
+  WindowManager overlay with QWERTY grid, PRO/BUBBLY/CASUAL/BOLD/BIG text-style
+  toggle, 5 pinned-snippet slots, font-size A+/A- controls, skin-tone picker,
+  voice button, and punctuation row, the Android analogue of
   `slide_keyboard.py`.
 - **Contexts**: bind `CYCLE_CONTEXT` to a button to cycle desktop → browser →
   iptv button-mapping presets (`ContextSwitcher`), each persisted
@@ -73,6 +78,7 @@ companion device — everything routes through public
 | `ControllerAccessibilityService.kt` | Input → gesture/action dispatch, voice PTT, lifecycle |
 | `CursorOverlay.kt` | Touch-transparent on-screen cursor |
 | `LegendOverlay.kt` | Small HUD bubble showing the active button legend |
+| `FloatingKeyboardOverlay.kt` | Floating on-screen keyboard (WindowManager overlay) |
 | `InputMapper.kt` | Pure KeyEvent/MotionEvent → `ControllerInput`/`ButtonAction` translation |
 | `ProfileManager.kt` / `ProfileSerializer.kt` | Persisted, user-editable button mapping |
 | `ContextSwitcher.kt` | desktop/browser/iptv profile presets |
@@ -82,7 +88,7 @@ companion device — everything routes through public
 | `VoiceBridgeServer.kt` | Loopback-only `/voice` + `/speak` HTTP endpoint |
 | `DriftCalibrator.kt` | Analog-stick drift compensation |
 | `ConsentManager.kt` | Persisted Groq-consent flag |
-| `ui/KeyboardActivity.kt` | Floating on-screen keyboard |
+| `ui/KeyboardActivity.kt` | Full-screen diagnostic keyboard (legacy) |
 | `ui/SettingsActivity.kt` | Per-input button mapping editor |
 
 ## Building
@@ -98,8 +104,15 @@ Install, above).
 
 ## Known limitations
 
-**Custom keyboard is a full-screen activity, not a floating IME.**
-`KeyboardActivity` opens as a regular activity and takes focus away from the
-field you were dictating into, rather than overlaying it like a real input
-method. A floating IME/accessibility-overlay keyboard is architecturally the
-right fix but is a larger redesign than this pass covers.
+**System IME integration is unreliable.** `AIInputMethodService` (a real
+system IME) was implemented but live-tested 2026-09-18 and found not to
+reliably surface its input view — `switchToInputMethod()` and
+`setShowMode(AUTO)` report success but `dumpsys input_method`'s `mInputShown`
+stays `false`. The working keyboard is `FloatingKeyboardOverlay`, a
+WindowManager overlay that never depends on IME arbitration.
+
+**D-pad on some controllers reports as HAT axes, not key events.**
+The default profile maps `DPAD_UP/DOWN/LEFT/RIGHT` as `KEY_EVENT`, but on
+controllers where the D-pad emits `AXIS_HAT_X/Y` motion events instead,
+those bindings do nothing until remapped in **Edit Button Mappings** (or the
+profile updated to include hat-axis mappings).

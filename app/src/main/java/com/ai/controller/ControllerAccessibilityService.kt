@@ -896,11 +896,14 @@ class ControllerAccessibilityService : AccessibilityService() {
     fun pressEnter() {
         try {
             val focused = typingTargetOrWarn("pressEnter") ?: return
-            val supportsImeEnter = focused.actionList.any {
-                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
-            }
+            // ACTION_IME_ENTER (value 4096) was added in API 30; minSdk is 26.
+            // Use the constant directly so this compiles on older targets; the
+            // performAction call simply returns false on API < 30, which we
+            // already handle by falling back to a newline.
+            val ACTION_IME_ENTER_ID = 4096
+            val supportsImeEnter = focused.actionList.any { it.id == ACTION_IME_ENTER_ID }
             if (supportsImeEnter) {
-                val ok = focused.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+                val ok = focused.performAction(ACTION_IME_ENTER_ID)
                 Log.d(TAG, "pressEnter: ACTION_IME_ENTER returned $ok")
                 if (ok) return
             }

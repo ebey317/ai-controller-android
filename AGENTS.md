@@ -19,7 +19,7 @@ literal port:
 | `text_styles.py` / `ptt_pynput.py`'s `_transform_text` | `TextStyles.kt` | Same 5 modes (PRO/BUBBLY/CASUAL/BOLD/BIG), same Unicode blocks |
 | `ptt_pynput.py`'s F13 on_press/on_release | `PttController.kt` | Press/release edge state machine, same debounce intent |
 | `controller-legend.py` | `LegendOverlay.kt` | Simplified to a single text bubble, not a paginated HUD |
-| `slide_keyboard.py` | `ui/KeyboardActivity.kt` | Activity, not an IME; 5 pin slots instead of 7 |
+| `slide_keyboard.py` | `FloatingKeyboardOverlay.kt` | WindowManager overlay, not an IME; 5 pin slots instead of 7; `ui/KeyboardActivity.kt` is a legacy diagnostic Activity |
 | `settle_wiggle.sh` | `DriftCalibrator.kt` | Expressed as input-math bias correction; there's no X11 mouse to nudge |
 | AntiMicroX desktop/browser/iptv profiles | `ContextSwitcher.kt` | Full `ControllerProfile` per context, persisted independently |
 
