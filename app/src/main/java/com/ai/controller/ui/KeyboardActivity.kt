@@ -38,6 +38,7 @@ class KeyboardActivity : AppCompatActivity() {
     private lateinit var modeButton: Button
     private var shiftOn = false
     private lateinit var keyGrid: GridLayout
+    private var cachedMode: TextStyles.Mode = TextStyles.Mode.PRO
 
     private val rowsLower = listOf(
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
@@ -48,6 +49,7 @@ class KeyboardActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         title = getString(R.string.keyboard_title)
+        cachedMode = PttModeStore.load(this)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -94,6 +96,7 @@ class KeyboardActivity : AppCompatActivity() {
     private fun onModeCycle() {
         val next = TextStyles.next(PttModeStore.load(this))
         PttModeStore.save(this, next)
+        cachedMode = next
         modeButton.text = modeLabel(next)
     }
 
@@ -170,7 +173,7 @@ class KeyboardActivity : AppCompatActivity() {
                 grid.addView(styledButton(label).apply {
                     layoutParams = GridLayout.LayoutParams().apply { width = 90; height = 90 }
                     setOnClickListener {
-                        ControllerAccessibilityService.instance?.typeCharacter(label)
+                        commitStyledChar(label)
                         if (shiftOn) {
                             shiftOn = false
                             populateKeyGrid(grid)
@@ -195,7 +198,7 @@ class KeyboardActivity : AppCompatActivity() {
         })
         row.addView(styledButton("space").apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { ControllerAccessibilityService.instance?.typeCharacter(" ") }
+            setOnClickListener { commitStyledChar(" ") }
         })
         row.addView(styledButton("⌫").apply {
             setOnClickListener { ControllerAccessibilityService.instance?.backspaceOnce() }
@@ -204,6 +207,19 @@ class KeyboardActivity : AppCompatActivity() {
             setOnClickListener { ControllerAccessibilityService.instance?.typeCharacter("\n") }
         })
         return row
+    }
+
+    private fun currentMode(): TextStyles.Mode = cachedMode
+
+    private fun commitStyledChar(ch: String) {
+        val styled = when (currentMode()) {
+            TextStyles.Mode.BUBBLY -> TextStyles.toCursive(ch)
+            TextStyles.Mode.BOLD -> TextStyles.toBold(ch)
+            TextStyles.Mode.BIG -> TextStyles.toOldEnglish(ch)
+            TextStyles.Mode.CASUAL -> ch.lowercase()
+            TextStyles.Mode.PRO -> ch
+        }
+        ControllerAccessibilityService.instance?.typeCharacter(styled)
     }
 
     // ── Shared styling ───────────────────────────────────────────────────

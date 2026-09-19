@@ -142,10 +142,9 @@ class CursorOverlay(private val context: Context) {
             // (startCustomKeyboard calls it unconditionally), so an uncaught instance of
             // either would crash the whole accessibility service on essentially any
             // keyboard-open press, not just this one call.
-            attached = false
-            cursorView = null
-            layoutParams = null
-            Log.w(TAG, "raise failed, cursor overlay detached", e)
+            Log.w(TAG, "raise failed, re-attaching cursor overlay", e)
+            hide()
+            show()
         }
     }
 

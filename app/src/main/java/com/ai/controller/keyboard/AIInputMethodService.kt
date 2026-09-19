@@ -47,19 +47,6 @@ class AIInputMethodService : InputMethodService() {
         listOf("z", "x", "c", "v", "b", "n", "m")
     )
 
-    // UI-only glyph picker, distinct from TextStyles' keyword-driven autoinsert map —
-    // these are just quick-tap emoji, grouped to match the desktop legend's categories.
-    private val emojiCategories: Map<String, List<String>> = linkedMapOf(
-        "😊" to listOf("😊", "😢", "❤️", "😠", "🤩", "😐", "😴", "🥺"),
-        "😂" to listOf("😂", "🤣", "🤯", "😱", "🎉", "🥳", "😬", "🤔"),
-        "👋" to listOf("👋", "🙏", "🙌", "🤙", "🙇", "🌅", "🌙"),
-        "👍" to listOf("👍", "👎", "👌", "✅", "❌", "🤷", "💯", "🔥"),
-        "🍕" to listOf("🍔", "☕", "🍺", "🍕", "🌮", "🍰", "🍫"),
-        "📱" to listOf("📱", "💻", "🎮", "🎵", "📚", "💡", "🚀"),
-        "☀️" to listOf("☀️", "🌙", "⭐", "🌧️", "❄️", "🐱", "🐶")
-    )
-    private val toneableBases = setOf("👋", "✌", "🙌", "🤙", "🙏", "🙇", "👍", "👎", "👌", "🤷")
-
     override fun onCreate() {
         super.onCreate()
         TextStyles.setSkinTone(SkinToneStore.load(this))
@@ -77,7 +64,6 @@ class AIInputMethodService : InputMethodService() {
         }
 
         root.addView(buildStyleAndToneRow())
-        root.addView(buildEmojiCategoryRow())
         pinsRow = buildPinsRow()
         root.addView(pinsRow)
         keyGrid = buildKeyGrid()
@@ -123,10 +109,10 @@ class AIInputMethodService : InputMethodService() {
 
     private fun styleLabel(mode: TextStyles.Mode): String = when (mode) {
         TextStyles.Mode.PRO -> "PRO"
-        TextStyles.Mode.BUBBLY -> TextStyles.toCursive("Bubbly")
-        TextStyles.Mode.CASUAL -> "casual"
+        TextStyles.Mode.BUBBLY -> "✨ " + TextStyles.toCursive("Cursive")
+        TextStyles.Mode.CASUAL -> "☕ casual"
         TextStyles.Mode.BOLD -> TextStyles.toBold("Bold")
-        TextStyles.Mode.BIG -> TextStyles.toOldEnglish("Big")
+        TextStyles.Mode.BIG -> TextStyles.toOldEnglish("Old-E")
     }
 
     private fun refreshStyleButtons() {
@@ -156,41 +142,7 @@ class AIInputMethodService : InputMethodService() {
         popup.showAsDropDown(anchor)
     }
 
-    // ── Emoji categories ────────────────────────────────────────────────
-
-    private fun buildEmojiCategoryRow(): LinearLayout {
-        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val categoryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val stripRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            visibility = View.GONE
-        }
-        for ((glyph, emojis) in emojiCategories) {
-            categoryRow.addView(styledButton(glyph).apply {
-                setOnClickListener {
-                    stripRow.removeAllViews()
-                    for (e in emojis) {
-                        stripRow.addView(styledButton(applyLocalSkinTone(e)).apply {
-                            setOnClickListener { commitEmoji(applyLocalSkinTone(e)) }
-                        })
-                    }
-                    stripRow.visibility = View.VISIBLE
-                }
-            })
-        }
-        container.addView(HorizontalScrollView(this).apply { addView(categoryRow) })
-        container.addView(HorizontalScrollView(this).apply { addView(stripRow) })
-        return container
-    }
-
-    private fun applyLocalSkinTone(emoji: String): String {
-        val modifier = TextStyles.currentSkinTone().modifier ?: return emoji
-        return if (emoji in toneableBases) emoji + modifier else emoji
-    }
-
-    private fun commitEmoji(emoji: String) {
-        currentInputConnection?.commitText(emoji, 1)
-    }
+    
 
     // ── Pinned snippets ──────────────────────────────────────────────────
 

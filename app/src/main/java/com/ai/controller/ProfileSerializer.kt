@@ -94,13 +94,19 @@ object ProfileSerializer {
                 // straight through as if it were real text. Root cause of "can't press
                 // enter," live 2026-09-19: see the rev-3 note above. Explicit "" defaults
                 // throughout so a missing value reads as missing everywhere, consistently.
-                val swipeDirection = actionJson.optString("swipeDirection", "").takeIf { it.isNotBlank() }?.let { dir ->
-                    runCatching { SwipeDirection.valueOf(dir) }.getOrNull()
-                }
-                val textOp = actionJson.optString("textOp", "").takeIf { it.isNotBlank() }?.let { op ->
-                    runCatching { TextEditOp.valueOf(op) }.getOrNull()
-                }
-                val textPayload = actionJson.optString("textPayload", "").takeIf { it.isNotBlank() }
+                val swipeDirection = if (!actionJson.isNull("swipeDirection")) {
+                    actionJson.optString("swipeDirection", "").takeIf { it.isNotBlank() }?.let { dir ->
+                        runCatching { SwipeDirection.valueOf(dir) }.getOrNull()
+                    }
+                } else null
+                val textOp = if (!actionJson.isNull("textOp")) {
+                    actionJson.optString("textOp", "").takeIf { it.isNotBlank() }?.let { op ->
+                        runCatching { TextEditOp.valueOf(op) }.getOrNull()
+                    }
+                } else null
+                val textPayload = if (!actionJson.isNull("textPayload")) {
+                    actionJson.optString("textPayload", "").takeIf { it.isNotBlank() }
+                } else null
                 mappings[input] = ButtonAction(
                     type = type,
                     label = actionJson.optString("label", ""),
