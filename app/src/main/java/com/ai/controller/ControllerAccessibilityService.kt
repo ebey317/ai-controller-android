@@ -503,6 +503,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     private fun reloadActiveProfile() {
+        cancelAllTriggerJobs()
         profile = contextSwitcher.profileFor(contextSwitcher.activeContext(), profileManager)
         if (profile.cursorEnabled) {
             cursorOverlay.show()
