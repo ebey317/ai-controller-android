@@ -86,11 +86,12 @@ class ControllerAccessibilityService : AccessibilityService() {
     private enum class DpadCaretOwner { NONE, KEY_EVENT, HAT }
     private var dpadCaretLeftOwner = DpadCaretOwner.NONE
     private var dpadCaretRightOwner = DpadCaretOwner.NONE
-    // Last known HAT-axis values from handleGenericMotion — retained for potential
-    // future use, but no longer needed for edge detection since owner markers
-    // replace the boolean flag + lastHatX race-prone pattern.
-    private var lastHatX = 0f
-    private var lastHatY = 0f
+    // Last known HAT-axis values from handleGenericMotion — retained for edge
+    // detection. Initialized to NaN so the first motion event after service start
+    // is never treated as a rising edge (comparisons with NaN are always false),
+    // preventing a spurious moveCaret() if the D-pad is already held at startup.
+    private var lastHatX = Float.NaN
+    private var lastHatY = Float.NaN
     private var lastStickScrollTimeMs = 0L
 
     // Lifecycle-scoped: every coroutine this service launches (trigger repeats,
@@ -1059,7 +1060,10 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     private fun injectFocusedText(node: AccessibilityNodeInfo, text: String) {
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (!success) {
+            Log.w(TAG, "injectFocusedText: ACTION_SET_TEXT not supported by focused view")
+        }
     }
 
     /**
