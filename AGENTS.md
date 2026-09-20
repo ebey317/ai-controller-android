@@ -69,6 +69,11 @@ already documents its desktop-mapping translation choices.
   `serviceScope`, cancelled in `teardown()`/`onDestroy()`. Don't reach for a
   bare `Handler.postDelayed` loop for new recurring work — it won't be
   cancelled by `serviceScope.cancel()`.
+- **A6** — analog trigger edge detection uses hysteresis (press at 0.5,
+  release at 0.25) in `InputMapper.isTriggerActive()`; a single fixed
+  threshold let analog noise dice a held trigger into multiple spurious
+  press/release edges, slicing one PTT hold into truncated recordings that
+  Whisper transcribed as fluent but wrong text. See `InputMapper.kt:60`.
 
 ## Verifying changes
 
