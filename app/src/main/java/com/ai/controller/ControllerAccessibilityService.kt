@@ -217,8 +217,17 @@ class ControllerAccessibilityService : AccessibilityService() {
         // are exactly the moments that can silently steal focus from the 1x1
         // joystick-capture overlay — reclaim it immediately here instead of
         // waiting for the periodic watchdog (startFocusWatchdog) to notice.
+        //
+        // hasWindowFocus(), not isFocused: isFocused reports VIEW focus within
+        // this overlay's own window, which Android leaves true even after the
+        // WINDOW itself loses input focus to the newly-foregrounded app — so this
+        // check was a no-op at exactly the moment it needed to fire. That's why
+        // A worked, B worked "sometimes," and X/Y/L1/R1 mostly didn't (live
+        // 2026-09-19): whichever button got pressed during a real-but-undetected
+        // focus loss was silently dropped, and there was no signal telling us it
+        // had happened.
         motionCaptureView?.let { view ->
-            if (!view.isFocused) {
+            if (!view.hasWindowFocus()) {
                 try {
                     view.requestFocus()
                 } catch (e: Exception) {
@@ -969,8 +978,9 @@ class ControllerAccessibilityService : AccessibilityService() {
     private fun startFocusWatchdog() {
         focusWatchdogJob = serviceScope.launch {
             while (isActive) {
+                // hasWindowFocus(), not isFocused — see onAccessibilityEvent above for why.
                 motionCaptureView?.let { view ->
-                    if (!view.isFocused) {
+                    if (!view.hasWindowFocus()) {
                         try {
                             view.requestFocus()
                         } catch (e: Exception) {
@@ -1243,7 +1253,12 @@ class ControllerAccessibilityService : AccessibilityService() {
         private const val SWIPE_DISTANCE_PX = 300f
         private const val TRIGGER_REPEAT_MS = 300L
         private const val STICK_SCROLL_COOLDOWN_MS = 200L
-        private const val FOCUS_WATCHDOG_INTERVAL_MS = 2000L
+        // Was 2000ms: with the isFocused->hasWindowFocus() fix above making this
+        // check finally see real focus loss, 2s between polls still meant a
+        // dropped-focus window up to 2 full seconds long with nothing catching a
+        // button press in it. Tight enough to feel instant, cheap enough (a single
+        // hasWindowFocus() read most ticks) not to matter for battery.
+        private const val FOCUS_WATCHDOG_INTERVAL_MS = 150L
         private const val LEGEND_TICK_INTERVAL_MS = 100L
         private const val MAX_RECORDING_MS = 30_000L
 
