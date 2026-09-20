@@ -78,16 +78,17 @@ class ControllerAccessibilityService : AccessibilityService() {
     private var motionCaptureView: MotionCaptureView? = null
     private val activeTriggerJobs = mutableMapOf<ControllerInput, Job>()
     private val triggerHeldState = mutableMapOf<ControllerInput, Boolean>()
-    // Unified edge state for D-pad left/right caret movement — used by BOTH the
+    // Owner-based edge state for D-pad left/right caret movement — used by BOTH the
     // KeyEvent path (KEYCODE_DPAD_LEFT/RIGHT in handleKeyEventAction/onKeyEvent)
-    // AND the HAT-axis path (AXIS_HAT_X in handleGenericMotion). Controllers that
-    // emit both signals for the same physical press will only trigger moveCaret()
-    // once, because whichever signal arrives first claims the shared flag.
-    private var dpadCaretLeftActive = false
-    private var dpadCaretRightActive = false
-    // Last known HAT-axis values from handleGenericMotion — used by KeyEvent
-    // ACTION_UP handlers to avoid clearing edge flags while the HAT axis is still
-    // physically held (race condition: KeyEvent UP may fire before HAT returns to center).
+    // AND the HAT-axis path (AXIS_HAT_X in handleGenericMotion). Each mechanism
+    // (KEY_EVENT or HAT) only ever sets/clears its own claim, eliminating the race
+    // where KeyEvent UP could clear a flag that HAT still actively holds (or vice versa).
+    private enum class DpadCaretOwner { NONE, KEY_EVENT, HAT }
+    private var dpadCaretLeftOwner = DpadCaretOwner.NONE
+    private var dpadCaretRightOwner = DpadCaretOwner.NONE
+    // Last known HAT-axis values from handleGenericMotion — retained for potential
+    // future use, but no longer needed for edge detection since owner markers
+    // replace the boolean flag + lastHatX race-prone pattern.
     private var lastHatX = 0f
     private var lastHatY = 0f
     private var lastStickScrollTimeMs = 0L
@@ -306,11 +307,9 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonUp()
                 } else {
                     disarmBackspaceHold()
-                    // Reset D-pad edge state on release ONLY if HAT axis is not
-                    // currently active in that direction (avoids race where KeyEvent UP
-                    // fires before HAT-axis returns to center, causing a spurious moveCaret).
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && lastHatX >= -0.5f) dpadCaretLeftActive = false
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && lastHatX <= 0.5f) dpadCaretRightActive = false
+                    // KeyEvent path only clears its own claim; never touches HAT's claim.
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && dpadCaretLeftOwner == DpadCaretOwner.KEY_EVENT) dpadCaretLeftOwner = DpadCaretOwner.NONE
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && dpadCaretRightOwner == DpadCaretOwner.KEY_EVENT) dpadCaretRightOwner = DpadCaretOwner.NONE
                 }
             }
         }
@@ -360,11 +359,9 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonUp()
                 } else {
                     disarmBackspaceHold()
-                    // Reset D-pad edge state on release ONLY if HAT axis is not
-                    // currently active in that direction (avoids race where KeyEvent UP
-                    // fires before HAT-axis returns to center, causing a spurious moveCaret).
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && lastHatX >= -0.5f) dpadCaretLeftActive = false
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && lastHatX <= 0.5f) dpadCaretRightActive = false
+                    // KeyEvent path only clears its own claim; never touches HAT's claim.
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && dpadCaretLeftOwner == DpadCaretOwner.KEY_EVENT) dpadCaretLeftOwner = DpadCaretOwner.NONE
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && dpadCaretRightOwner == DpadCaretOwner.KEY_EVENT) dpadCaretRightOwner = DpadCaretOwner.NONE
                 }
             }
         }
@@ -434,15 +431,14 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() &&
             (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
         ) {
-            // Edge detection: some controllers emit both KeyEvents AND HAT-axis motion
-            // for the D-pad, which would cause double caret movement per press without
-            // this guard. Uses shared flags with handleGenericMotion's HAT-axis path.
+            // Edge detection using owner markers: each mechanism (KEY_EVENT or HAT)
+            // only sets/clears its own claim, so there's no race window.
             val leftDown = action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT
             val rightDown = action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
-            if (leftDown && !dpadCaretLeftActive) moveCaret(-1)
-            if (rightDown && !dpadCaretRightActive) moveCaret(1)
-            dpadCaretLeftActive = leftDown
-            dpadCaretRightActive = rightDown
+            if (leftDown && dpadCaretLeftOwner == DpadCaretOwner.NONE) moveCaret(-1)
+            if (rightDown && dpadCaretRightOwner == DpadCaretOwner.NONE) moveCaret(1)
+            if (leftDown) dpadCaretLeftOwner = DpadCaretOwner.KEY_EVENT
+            if (rightDown) dpadCaretRightOwner = DpadCaretOwner.KEY_EVENT
             return
         }
         when (action.keyCode) {
@@ -1210,20 +1206,21 @@ class ControllerAccessibilityService : AccessibilityService() {
         val keyboardOpenNotDragging = ::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() &&
             !keyboardOverlay.isDragging()
         // Same left/right-moves-the-caret redirect as handleKeyEventAction's D-pad case,
-        // but edge-detected: this event fires continuously while the D-pad is held (unlike
-        // a KeyEvent, which fires once per press), so acting on every tick would blow
-        // through the whole field in a fraction of a second instead of moving one character
-        // at a time.
+        // but edge-detected via owner markers: this event fires continuously while the
+        // D-pad is held (unlike a KeyEvent, which fires once per press), so acting on
+        // every tick would blow through the whole field in a fraction of a second instead
+        // of moving one character at a time. HAT path only sets/clears its own claim.
         if (keyboardOpenNotDragging) {
             val leftActive = hatX < -0.5f
             val rightActive = hatX > 0.5f
-            if (leftActive && !dpadCaretLeftActive) moveCaret(-1)
-            if (rightActive && !dpadCaretRightActive) moveCaret(1)
-            dpadCaretLeftActive = leftActive
-            dpadCaretRightActive = rightActive
+            if (leftActive && dpadCaretLeftOwner == DpadCaretOwner.NONE) moveCaret(-1)
+            if (rightActive && dpadCaretRightOwner == DpadCaretOwner.NONE) moveCaret(1)
+            if (leftActive) dpadCaretLeftOwner = DpadCaretOwner.HAT else if (!leftActive && dpadCaretLeftOwner == DpadCaretOwner.HAT) dpadCaretLeftOwner = DpadCaretOwner.NONE
+            if (rightActive) dpadCaretRightOwner = DpadCaretOwner.HAT else if (!rightActive && dpadCaretRightOwner == DpadCaretOwner.HAT) dpadCaretRightOwner = DpadCaretOwner.NONE
         } else {
-            dpadCaretLeftActive = false
-            dpadCaretRightActive = false
+            // Keyboard closed or being dragged: clear HAT claims so they don't stick.
+            if (dpadCaretLeftOwner == DpadCaretOwner.HAT) dpadCaretLeftOwner = DpadCaretOwner.NONE
+            if (dpadCaretRightOwner == DpadCaretOwner.HAT) dpadCaretRightOwner = DpadCaretOwner.NONE
         }
         if (hatX != 0f || hatY != 0f) {
             if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() && keyboardOverlay.isDragging()) {
