@@ -70,6 +70,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     private lateinit var debugOverlay: DebugOverlay
     private lateinit var keyboardOverlay: FloatingKeyboardOverlay
     private var keyboardTypingTarget: AccessibilityNodeInfo? = null
+    private var lastFreshFocusTarget: AccessibilityNodeInfo? = null
     private lateinit var voiceManager: VoiceManager
     private lateinit var windowManager: WindowManager
     private var profile: ControllerProfile = ControllerProfile.default()
@@ -468,7 +469,11 @@ class ControllerAccessibilityService : AccessibilityService() {
     private fun startCustomKeyboard() {
         if (!keyboardOverlay.isShowing()) {
             keyboardTypingTarget = findEditableTarget()
-            selectAllOnFreshFocus(keyboardTypingTarget)
+            val target = keyboardTypingTarget
+            if (target != lastFreshFocusTarget) {
+                selectAllOnFreshFocus(target)
+                lastFreshFocusTarget = target
+            }
         }
         keyboardOverlay.toggle()
         if (!keyboardOverlay.isShowing()) {
@@ -504,7 +509,10 @@ class ControllerAccessibilityService : AccessibilityService() {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, length)
             }
-            target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+            val success = target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+            if (!success) {
+                Log.w(TAG, "selectAllOnFreshFocus: ACTION_SET_SELECTION not supported by focused view")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "selectAllOnFreshFocus failed", e)
         }
@@ -1102,10 +1110,10 @@ class ControllerAccessibilityService : AccessibilityService() {
             val focused = typingTargetOrWarn("deleteToLineStart") ?: return
             val current = focused.text?.toString().orEmpty()
             if (current.isEmpty()) return
-            val at = caretIndex(focused, current)
-            if (at <= 0) return
-            val lineStart = current.lastIndexOf('\n', at - 1) + 1
-            injectFocusedText(focused, current.substring(0, lineStart) + current.substring(at))
+            val (start, end) = caretRange(focused, current)
+            if (start <= 0) return
+            val lineStart = current.lastIndexOf('\n', end - 1) + 1
+            injectFocusedText(focused, current.substring(0, lineStart) + current.substring(end))
         } catch (e: Exception) {
             Log.e(TAG, "deleteToLineStart failed", e)
         }

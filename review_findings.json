@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "SELECTALLONFRESHFOCUS-SILENT-FAILURE",
+      "severity": "error",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 507,
+      "description": "selectAllOnFreshFocus() calls performAction(ACTION_SET_SELECTION) but ignores the Boolean return value. If the field doesn't support SET_SELECTION (e.g., non-editable fields, some custom views, API limitations), the selection won't be established, and the user's original problem (text appending instead of replacing) will persist silently. This is the exact same class of bug fixed in rounds 10 (MOVECARET-SILENT-FAILURE) and 11 (INJECTFOCUSEDTEXT-SILENT-FAILURE) where performAction return values were added with warning logs.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "SELECTALLONFRESHFOCUS-FIRES-ON-TOGGLE",
+      "severity": "error",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 469,
+      "description": "The user intent explicitly states selectAllOnFreshFocus() should be 'called exactly once inside startCustomKeyboard() at the moment it captures a NEWLY-focused field (guarded by the existing \\'!keyboardOverlay.isShowing()\\' branch, so it does not re-fire on every keyboard toggle against the same already-in-progress field, which would otherwise keep wiping partially-typed content every time the user closes and reopens the keyboard on the same field)'. However, the implementation clears keyboardTypingTarget = null when the keyboard is hidden (line 475), so on the next open it always finds a target and calls selectAllOnFreshFocus(), wiping any partially-typed content. The guard !keyboardOverlay.isShowing() only prevents re-selection if startCustomKeyboard is called while the keyboard is already showing, not on toggle cycles.",
+      "action": "ask-user",
+      "review_scope": "source"
+    },
+    {
+      "id": "DELETETOLINESTART-IGNORERESPECT-SELECTION",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 1105,
+      "description": "deleteToLineStart() uses caretIndex() (single point, textSelectionStart only) instead of caretRange(), so it doesn't respect textSelectionEnd. If the user has text selected and holds backspace, it deletes from line start to selection start, leaving the selected text (from start to end) intact. This is inconsistent with backspaceOnce(), deleteNextOnce(), and commitTextOnce() which all use caretRange() and properly replace/remove the selection. The user intent describes backspace hold as 'clearing from the caret back to the last newline or field start' but doesn't explicitly address selection behavior.",
+      "action": "ask-user",
+      "review_scope": "source"
+    }
+  ],
+  "tested": [],
+  "testing_summary": "No tests exist in this codebase. The change introduces new pure logic (caretRange, selectAllOnFreshFocus) and modifies six text-mutation functions. AGENTS.md recommends adding JUnit tests for non-trivial logic in these pieces. Live verification requires a physical Android device with gamepad which is not available in this sandboxed environment.",
+  "risk_level": "medium",
+  "risk_rationale": "The core fix (caretRange + range-aware mutations) is correctly implemented and addresses the user's reported UX gap. However, two errors exist: selectAllOnFreshFocus has a silent failure mode that would leave the original bug unfixed for unsupported fields, and it fires on keyboard toggles contrary to the user intent, wiping user input. The deleteToLineStart inconsistency is a warning-level concern.",
+  "risk_scope": "source-or-external"
+}
