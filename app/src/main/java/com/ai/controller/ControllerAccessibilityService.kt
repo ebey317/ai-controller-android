@@ -98,6 +98,12 @@ class ControllerAccessibilityService : AccessibilityService() {
     private var focusWatchdogJob: Job? = null
     private var backspaceHoldJob: Job? = null
 
+    // Idempotent guard: tracks the last KeyEvent (downTime, keyCode, action) handled
+    // by either onKeyEvent (a11y filter) or handleCapturedKeyEvent (MotionCaptureView)
+    // to prevent double-firing on devices where both paths deliver the same event.
+    private var lastHandledKeyEvent: Triple<Long, Int, Int>? = null
+    private val KEY_EVENT_RECENCY_MS = 50L
+
     // Push-to-talk state — A2: coroutine-driven recording with a sized AudioRecord
     // buffer and real cancellation, instead of a raw busy-read Thread.
     private lateinit var pttController: PttController
@@ -264,6 +270,18 @@ class ControllerAccessibilityService : AccessibilityService() {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return false
         if (event.repeatCount > 0) return true
 
+        // Idempotent guard: skip if this exact KeyEvent was already handled
+        // via the other path (onKeyEvent) within the recency window.
+        val key = Triple(event.downTime, event.keyCode, event.action)
+        val last = lastHandledKeyEvent
+        if (last != null) {
+            val (lastDownTime, _, _) = last
+            if (key == last && (SystemClock.uptimeMillis() - lastDownTime) < KEY_EVENT_RECENCY_MS) {
+                return true
+            }
+        }
+        lastHandledKeyEvent = key
+
         val action = inputMapper.resolveAction(profile, input)
         Log.d(TAG, "captured input=$input action=${action.type} profile=${profile.name}")
         showDebug("Last: $input\nAction: ${action.type}\nPTT: ${if (pttController.isHeld) "HELD" else "idle"}")
@@ -301,6 +319,18 @@ class ControllerAccessibilityService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return super.onKeyEvent(event)
         if (event.repeatCount > 0) return true // swallow OS auto-repeat; we drive our own timing
+
+        // Idempotent guard: skip if this exact KeyEvent was already handled
+        // via the other path (handleCapturedKeyEvent) within the recency window.
+        val key = Triple(event.downTime, event.keyCode, event.action)
+        val last = lastHandledKeyEvent
+        if (last != null) {
+            val (lastDownTime, _, _) = last
+            if (key == last && (SystemClock.uptimeMillis() - lastDownTime) < KEY_EVENT_RECENCY_MS) {
+                return true
+            }
+        }
+        lastHandledKeyEvent = key
 
         val action = inputMapper.resolveAction(profile, input)
         Log.d(TAG, "onKeyEvent input=$input action=${action.type} profile=${profile.name}")
