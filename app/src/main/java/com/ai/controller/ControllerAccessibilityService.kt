@@ -85,6 +85,11 @@ class ControllerAccessibilityService : AccessibilityService() {
     // once, because whichever signal arrives first claims the shared flag.
     private var dpadCaretLeftActive = false
     private var dpadCaretRightActive = false
+    // Last known HAT-axis values from handleGenericMotion — used by KeyEvent
+    // ACTION_UP handlers to avoid clearing edge flags while the HAT axis is still
+    // physically held (race condition: KeyEvent UP may fire before HAT returns to center).
+    private var lastHatX = 0f
+    private var lastHatY = 0f
     private var lastStickScrollTimeMs = 0L
 
     // Lifecycle-scoped: every coroutine this service launches (trigger repeats,
@@ -301,9 +306,11 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonUp()
                 } else {
                     disarmBackspaceHold()
-                    // Reset D-pad edge state on release so the next press fires again
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) dpadCaretLeftActive = false
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) dpadCaretRightActive = false
+                    // Reset D-pad edge state on release ONLY if HAT axis is not
+                    // currently active in that direction (avoids race where KeyEvent UP
+                    // fires before HAT-axis returns to center, causing a spurious moveCaret).
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && lastHatX >= -0.5f) dpadCaretLeftActive = false
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && lastHatX <= 0.5f) dpadCaretRightActive = false
                 }
             }
         }
@@ -353,9 +360,11 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonUp()
                 } else {
                     disarmBackspaceHold()
-                    // Reset D-pad edge state on release so the next press fires again
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) dpadCaretLeftActive = false
-                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) dpadCaretRightActive = false
+                    // Reset D-pad edge state on release ONLY if HAT axis is not
+                    // currently active in that direction (avoids race where KeyEvent UP
+                    // fires before HAT-axis returns to center, causing a spurious moveCaret).
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && lastHatX >= -0.5f) dpadCaretLeftActive = false
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && lastHatX <= 0.5f) dpadCaretRightActive = false
                 }
             }
         }
@@ -1196,6 +1205,8 @@ class ControllerAccessibilityService : AccessibilityService() {
         // the actual signal this controller sends.
         val hatX = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_X)
         val hatY = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_Y)
+        lastHatX = hatX
+        lastHatY = hatY
         val keyboardOpenNotDragging = ::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() &&
             !keyboardOverlay.isDragging()
         // Same left/right-moves-the-caret redirect as handleKeyEventAction's D-pad case,
