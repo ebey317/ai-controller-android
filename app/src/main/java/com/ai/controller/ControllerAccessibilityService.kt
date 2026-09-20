@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.PointF
+import android.graphics.Rect
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -70,7 +71,16 @@ class ControllerAccessibilityService : AccessibilityService() {
     private lateinit var debugOverlay: DebugOverlay
     private lateinit var keyboardOverlay: FloatingKeyboardOverlay
     private var keyboardTypingTarget: AccessibilityNodeInfo? = null
-    private var lastFreshFocusTarget: AccessibilityNodeInfo? = null
+    // Not an AccessibilityNodeInfo reference: findEditableTarget() returns a NEW node
+    // instance on every call (OCR-confirmed live 2026-09-20), so reference equality
+    // between successive captures is worthless - it's true almost every time, even for
+    // the exact same on-screen field, which made selectAllOnFreshFocus() below re-fire
+    // (and wipe partially-typed text) on every keyboard reopen instead of only on a
+    // genuinely new field. FieldIdentity is a structural (data class) comparison of the
+    // node's window/package/view-id/on-screen position - stable across separate node
+    // instances for the same underlying view, without depending on
+    // AccessibilityNodeInfo's own unreliable equals().
+    private var lastFreshFocusIdentity: FieldIdentity? = null
     private lateinit var voiceManager: VoiceManager
     private lateinit var windowManager: WindowManager
     private var profile: ControllerProfile = ControllerProfile.default()
@@ -470,9 +480,10 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (!keyboardOverlay.isShowing()) {
             keyboardTypingTarget = findEditableTarget()
             val target = keyboardTypingTarget
-            if (target != lastFreshFocusTarget) {
+            val identity = target?.let(::fieldIdentity)
+            if (identity != null && identity != lastFreshFocusIdentity) {
                 selectAllOnFreshFocus(target)
-                lastFreshFocusTarget = target
+                lastFreshFocusIdentity = identity
             }
         }
         keyboardOverlay.toggle()
@@ -487,6 +498,23 @@ class ControllerAccessibilityService : AccessibilityService() {
         showDebug(if (keyboardOverlay.isShowing()) "Kbd: shown" else "Kbd: hidden")
     }
 
+    /** A structural fingerprint of "which on-screen field this is" — window, package, view
+     * id (when the view declares one), and screen position. A data class gets real
+     * equals()/hashCode() for free, unlike AccessibilityNodeInfo itself, whose separate
+     * instances for the same underlying view do not reliably compare equal. */
+    private data class FieldIdentity(
+        val windowId: Int,
+        val packageName: CharSequence?,
+        val viewIdResourceName: String?,
+        val boundsInScreen: Rect
+    )
+
+    private fun fieldIdentity(node: AccessibilityNodeInfo): FieldIdentity {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        return FieldIdentity(node.windowId, node.packageName, node.viewIdResourceName, bounds)
+    }
+
     /** Selects a freshly-focused field's entire current text, so the first keystroke
      * replaces it instead of landing after it. Reported live 2026-09-20: "the harness...
      * doesn't put a text cursor up there... instead of deleting [the placeholder] to have
@@ -497,8 +525,9 @@ class ControllerAccessibilityService : AccessibilityService() {
      * normally leaves it fully selected via the app's own focus handling; this app
      * captures focus through the accessibility API instead of a real touch, so that
      * never happened on its own — this establishes the same selection explicitly. Only
-     * runs once per fresh keyboard-open (not on every keystroke), so resuming a
-     * partially-typed field across keyboard toggles doesn't keep wiping it. */
+     * runs once per fresh keyboard-open on a genuinely new field (see FieldIdentity
+     * above), so resuming a partially-typed field across keyboard toggles doesn't keep
+     * wiping it. */
     private fun selectAllOnFreshFocus(node: AccessibilityNodeInfo?) {
         val target = node ?: return
         try {
