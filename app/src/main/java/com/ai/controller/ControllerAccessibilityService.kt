@@ -83,6 +83,12 @@ class ControllerAccessibilityService : AccessibilityService() {
     // see the caret-move branch in handleGenericMotion).
     private var hatLeftHeld = false
     private var hatRightHeld = false
+    // Edge state for KeyEvent D-pad left/right (KEYCODE_DPAD_LEFT/RIGHT), so caret
+    // movement fires once per press instead of on every ACTION_DOWN repeat. Needed
+    // because some controllers emit BOTH KeyEvents and HAT-axis motion for the D-pad,
+    // which would otherwise cause double caret movement per press.
+    private var dpadLeftHeld = false
+    private var dpadRightHeld = false
     private var lastStickScrollTimeMs = 0L
 
     // Lifecycle-scoped: every coroutine this service launches (trigger repeats,
@@ -281,6 +287,9 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonUp()
                 } else {
                     disarmBackspaceHold()
+                    // Reset D-pad edge state on release so the next press fires again
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) dpadLeftHeld = false
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) dpadRightHeld = false
                 }
             }
         }
@@ -318,6 +327,9 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonUp()
                 } else {
                     disarmBackspaceHold()
+                    // Reset D-pad edge state on release so the next press fires again
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) dpadLeftHeld = false
+                    if (action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) dpadRightHeld = false
                 }
             }
         }
@@ -387,7 +399,15 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() &&
             (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
         ) {
-            moveCaret(if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1)
+            // Edge detection: some controllers emit both KeyEvents AND HAT-axis motion
+            // for the D-pad, which would cause double caret movement per press without
+            // this guard. Mirrors the hatLeftHeld/hatRightHeld pattern in handleGenericMotion.
+            val leftDown = action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+            val rightDown = action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            if (leftDown && !dpadLeftHeld) moveCaret(-1)
+            if (rightDown && !dpadRightHeld) moveCaret(1)
+            dpadLeftHeld = leftDown
+            dpadRightHeld = rightDown
             return
         }
         when (action.keyCode) {
@@ -538,6 +558,7 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     private fun reloadActiveProfile() {
         cancelAllTriggerJobs()
+        pttController.reset()
         profile = contextSwitcher.profileFor(contextSwitcher.activeContext(), profileManager)
         if (profile.cursorEnabled) {
             cursorOverlay.show()

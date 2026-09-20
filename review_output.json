@@ -1,0 +1,47 @@
+{
+  "findings": [
+    {
+      "id": "PTT-CONTROLLER-STATE-LEAK",
+      "severity": "error",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 539,
+      "description": "reloadActiveProfile() calls cancelAllTriggerJobs() to clear triggerHeldState and activeTriggerJobs on context switch (fixing HYS-1), but does NOT reset pttController.isHeld. If user holds a trigger mapped to VOICE_TRIGGER, cycles context while still holding, and the new profile maps that trigger to a different action (e.g., SCROLL), the PttController still believes it's recording. When the user releases the trigger, handleTrigger sees wasActive=false (cleared) and active=false (released), so no edge fires and pttController.onButtonUp() is never called. The recording continues until MAX_RECORDING_MS (30s) timeout or a subsequent trigger press. Fix: call pttController.reset() in reloadActiveProfile() or cycleContext().",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "DOUBLE-CARET-MOVE-ON-DPAD",
+      "severity": "error",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 387,
+      "description": "Both handleKeyEventAction (KeyEvent path) and handleGenericMotion (HAT axis path) fire moveCaret() for D-pad left/right when the floating keyboard is open. For controllers that emit BOTH KeyEvents and HAT axis motion for the D-pad, a single press triggers moveCaret() twice: once from handleKeyEventAction on ACTION_DOWN, and again from handleGenericMotion on the first HAT axis event (since hatLeftHeld/hatRightHeld start as false). The user experiences the caret jumping two positions per press. The HAT axis path has edge detection but the KeyEvent path does not coordinate with it.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "FLOATING-KEYBOARD-REBUILD-RACE",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/FloatingKeyboardOverlay.kt",
+      "line": 278,
+      "description": "rebuildContent() removes the old view then adds the new one. If windowManager.addView() throws (e.g., BadTokenException), the catch block logs but does not restore rootView — it still points to the old view which was successfully removed and is now detached. The keyboard becomes permanently broken (showing stale content or nothing) until the next font size change triggers another rebuild. Fix: in the catch block, set rootView = null and windowParams = null so a subsequent show() reinitializes cleanly, or re-add the old view on failure.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "TEXTSTYLES-MISSING-NEWLINE",
+      "severity": "info",
+      "file": "app/src/main/java/com/ai/controller/TextStyles.kt",
+      "line": 295,
+      "description": "The file ends without a trailing newline (git shows '\\ No newline at end of file'). This is a minor style violation; some tools warn about it. Fix: add a newline at end of file.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    }
+  ],
+  "tested": [
+    "compileDebugKotlin - successful"
+  ],
+  "testing_summary": "Build compiles successfully. No test suite exists in this port yet (per AGENTS.md). Live validation on physical device not possible in this environment (no KVM/emulator, no physical gamepad).",
+  "risk_level": "medium",
+  "risk_rationale": "The change introduces significant new functionality (caret-aware editing, backspace hold, context switching, floating keyboard, drift calibration) with two correctness bugs (PTT state leak on context switch, double caret movement on D-pad) that affect core user flows. The bugs are fixable with localized changes but should not ship as-is.",
+  "risk_scope": "source-or-external"
+}

@@ -285,6 +285,8 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
             rootView = newRoot
         } catch (e: Exception) {
             Log.e(TAG, "rebuildContent failed", e)
+            rootView = null
+            windowParams = null
         }
     }
 
