@@ -74,7 +74,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     // Not an AccessibilityNodeInfo reference: findEditableTarget() returns a NEW node
     // instance on every call (OCR-confirmed live 2026-09-20), so reference equality
     // between successive captures is worthless - it's true almost every time, even for
-    // the exact same on-screen field, which made selectAllOnFreshFocus() below re-fire
+    // the exact same on-screen field, which made clearOnFreshFocus() below re-fire
     // (and wipe partially-typed text) on every keyboard reopen instead of only on a
     // genuinely new field. FieldIdentity is a structural (data class) comparison of the
     // node's window/package/view-id/on-screen position - stable across separate node
