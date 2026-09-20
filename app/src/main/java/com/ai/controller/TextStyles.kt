@@ -293,3 +293,4 @@ object KeyboardFontSizeStore {
     fun larger(current: Float): Float = STEPS_SP.lastOrNull { it > current } ?: STEPS_SP.max()
     fun smaller(current: Float): Float = STEPS_SP.firstOrNull { it < current } ?: STEPS_SP.min()
 }
+

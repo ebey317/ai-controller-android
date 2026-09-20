@@ -1,0 +1,90 @@
+{
+  "findings": [
+    {
+      "id": "BACKSPACE-HOLD-NOT-CANCELLED-ON-PROFILE-SWITCH",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 585,
+      "description": "reloadActiveProfile() calls cancelAllTriggerJobs() to clear trigger state on context/profile switch, but does not cancel backspaceHoldJob. If user holds B (backspace) and switches context, the 500ms hold timer continues and may fire deleteToLineStart() in the new context, causing unexpected deletion. The fix should cancel backspaceHoldJob in reloadActiveProfile() before loading the new profile.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "IDEMPOTENT-GUARD-RECENCY-WINDOW",
+      "severity": "info",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 105,
+      "description": "The idempotent guard for double key event handling uses a 50ms recency window (KEY_EVENT_RECENCY_MS). While this prevents double-firing when both a11y filter and MotionCaptureView deliver the same event, a legitimate rapid double-press on the same key within 50ms would be incorrectly skipped. 50ms is extremely fast for human input (typical double-tap >200ms), so this is low risk, but the guard could be made more precise by also checking keyCode equality (already done via Triple) and ensuring it only applies to the SAME physical press (same downTime). Current implementation is acceptable but worth noting.",
+      "action": "no-op",
+      "review_scope": "source"
+    },
+    {
+      "id": "PROFILE-SERIALIZER-REV4-DATA-LOSS",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/ProfileSerializer.kt",
+      "line": 83,
+      "description": "REV=4 migration (lines 83-91) discards ALL user-customized button mappings from any profile with rev < 4, keeping only tuning values (sensitivity/deadzone/cursorEnabled/invertScroll). This is a breaking data-loss change for existing users. While the comment acknowledges this as acceptable for AntiMicroX parity and the REV bump serves as a safety net for the RS/Enter bug, it must be explicitly documented in release notes so users know their custom mappings will be reset.",
+      "action": "ask-user",
+      "review_scope": "source"
+    },
+    {
+      "id": "MISSING-TESTS-FOR-NEW-LOGIC",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 872,
+      "description": "The change introduces significant new pure/testable logic without corresponding tests: caretIndex() (line 872), moveCaret() (line 998), deleteToLineStart() (line 1036), DriftCalibrator (new file), ContextSwitcher (new file), FloatingKeyboardOverlay (new file), InputMapper hysteresis (InputMapper.kt:69). AGENTS.md explicitly recommends adding JUnit tests for non-trivial logic in these pieces. No test suite exists in this port yet.",
+      "action": "ask-user",
+      "review_scope": "source"
+    },
+    {
+      "id": "FOCUS-ARCH-MISMATCH",
+      "severity": "info",
+      "file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+      "line": 1399,
+      "description": "MotionCaptureView comment (lines 1399-1403) claims digital buttons route through the focused capture view as the primary path ('the a11y onKeyEvent path loses the race'), but onKeyEvent (line 319) returns true for all mapped keys, consuming them before MotionCaptureView ever sees them. The focus-reclaim watchdog only protects MotionCaptureView focus for joystick input; digital buttons (A/B/X/Y/L1/R1) use the a11y filter path which doesn't benefit from focus reclaim. This is a pre-existing architectural inconsistency; user previously chose to ignore.",
+      "action": "no-op",
+      "review_scope": "source"
+    },
+    {
+      "id": "AI-IME-FONT-SIZE-BUG",
+      "severity": "warning",
+      "file": "app/src/main/java/com/ai/controller/keyboard/AIInputMethodService.kt",
+      "line": 202,
+      "description": "AIInputMethodService.fontSize bug: populateKeyGrid() clears allButtons at line 202 AFTER buildFontSizeRow() (A+/A- buttons), buildStyleAndToneRow() (style mode buttons, skin tone picker), and buildPinsRow() (pin buttons) have already added their buttons via styledButton(). changeFontSize() at line 318 only iterates over allButtons, so font size changes don't apply to font size controls, style buttons, skin tone picker, or pin buttons — only key grid and bottom row buttons. FloatingKeyboardOverlay correctly uses rebuildContent() to recreate all buttons. This is a pre-existing bug in a legacy/diagnostic-only keyboard file; user previously chose to ignore.",
+      "action": "ask-user",
+      "review_scope": "source"
+    },
+    {
+      "id": "TEXTSTYLES-MISSING-NEWLINE",
+      "severity": "info",
+      "file": "app/src/main/java/com/ai/controller/TextStyles.kt",
+      "line": 295,
+      "description": "The file ends without a trailing newline (git shows '\\ No newline at end of file'). This is a minor style violation; some tools warn about it.",
+      "action": "auto-fix",
+      "review_scope": "source"
+    },
+    {
+      "id": "DRIFT-CALIBRATOR-REST-MAX-TUNING",
+      "severity": "info",
+      "file": "app/src/main/java/com/ai/controller/DriftCalibrator.kt",
+      "line": 73,
+      "description": "REST_MAX=0.12f may be too small for badly worn analog sticks with large drift offsets. If a stick's resting magnitude exceeds 0.12, the calibrator treats it as active motion and resets history, never learning the bias. This is a tuning parameter that may need adjustment based on real hardware testing.",
+      "action": "no-op",
+      "review_scope": "source"
+    },
+    {
+      "id": "SIMPLIFICATION-SCOPE-EXPANSION",
+      "severity": "warning",
+      "file": "multiple",
+      "line": 1,
+      "description": "The change introduces 36 modified/new files, but the user intent only describes fixing three specific text-editing gaps (caret-aware mutations, D-pad/HAT caret movement, backspace hold) plus a ProfileSerializer REV bump for RS/Enter safety. Major components not required by the stated intent: ContextSwitcher (3 profile contexts), FloatingKeyboardOverlay (new keyboard implementation), VoiceBridgeServer (loopback HTTP server), VoiceManager (TTS), DriftCalibrator, CursorOverlay, DebugOverlay, LegendOverlay, PinStore, GroqKeyStore, ConsentManager, KeyboardFontSizeStore, SkinToneStore, PttController, and extensive ProfileManager/ControllerProfile rewrites. Per simplification rules, each unrequired component should be evaluated for removal unless the change's own stated purpose (beyond the user intent) requires them. Recommend confirming whether this scope expansion is intentional or if the review should only cover the three gaps + REV bump.",
+      "action": "ask-user",
+      "review_scope": "source"
+    }
+  ],
+  "tested": [],
+  "testing_summary": "No tests were run during this review phase per pipeline rules. Build compiles successfully (./gradlew compileDebugKotlin). Live validation not possible in sandboxed environment (no KVM/emulator/device).",
+  "risk_level": "medium",
+  "risk_rationale": "The core text-editing fixes (caretIndex, moveCaret, backspace hold, RS/Enter) are correctly implemented and satisfy the user intent. However, the change includes massive scope expansion (36 files, many new components) beyond the stated intent, a backspace hold timer leak on profile switch, and missing tests for significant new logic. The REV=4 migration causes data loss for existing users' custom mappings. These issues warrant follow-up but don't block the core fix.",
+  "risk_scope": "source-or-external"
+}

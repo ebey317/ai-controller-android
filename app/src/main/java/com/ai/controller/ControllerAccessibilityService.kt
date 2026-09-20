@@ -584,6 +584,8 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     private fun reloadActiveProfile() {
         cancelAllTriggerJobs()
+        backspaceHoldJob?.cancel()
+        backspaceHoldJob = null
         // If a voice trigger was held, cancel the recording instead of just resetting
         // the PTT state machine — a bare reset() only clears isHeld and leaves the
         // AudioRecord/coroutine running until MAX_RECORDING_MS (30s).
