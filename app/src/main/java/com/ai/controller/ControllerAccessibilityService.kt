@@ -1012,7 +1012,10 @@ class ControllerAccessibilityService : AccessibilityService() {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, next)
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, next)
             }
-            focused.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+            val success = focused.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+            if (!success) {
+                Log.w(TAG, "moveCaret: ACTION_SET_SELECTION not supported by focused view")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "moveCaret failed", e)
         }
