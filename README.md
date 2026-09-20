@@ -52,11 +52,16 @@ companion device — everything routes through public
 
 ## Using it
 
-- **Left stick** — move the cursor. **A** — tap. **B/X** — back. **Y** —
-  recents. **LB** — scroll up. **RB** — long-press. **RT** — hold to talk,
-  release to transcribe and type. **Select/View (⧉)** — toggle the floating
-  on-screen keyboard. **Start** — move accessibility focus. **Right-stick
-  click (RS)** — Enter/submit in the focused field.
+- **Left stick** — move the cursor. **A** — tap. **B** — backspace (hold
+  500ms to delete to line start). **X** — forward delete. **Y** — recents.
+  **LB** — tap (label "Shift"). **RB** — long-press (label "R·Clk"). **LT** —
+  tap (label "Ctrl"). **RT** — hold to talk, release to transcribe and type.
+  **Select/View (⧉)** — toggle the floating on-screen keyboard. **Start** —
+  move accessibility focus. **Right-stick click (RS)** — Enter/submit in the
+  focused field.
+- **D-pad / HAT left/right** — while the floating keyboard is open and not
+  being dragged, moves the text caret in the focused field by ±1 character
+  (instead of nudging the mouse cursor).
 - **Edit Button Mappings** (in the app) rebinds any input to any action,
   including the new `CYCLE_CONTEXT` action (see below).
 - **Open Custom Keyboard** (in the app) launches [`KeyboardActivity`](app/src/main/java/com/ai/controller/ui/KeyboardActivity.kt) — a
