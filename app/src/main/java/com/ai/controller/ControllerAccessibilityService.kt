@@ -1201,8 +1201,6 @@ class ControllerAccessibilityService : AccessibilityService() {
         // the actual signal this controller sends.
         val hatX = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_X)
         val hatY = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_Y)
-        lastHatX = hatX
-        lastHatY = hatY
         val keyboardOpenNotDragging = ::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() &&
             !keyboardOverlay.isDragging()
         // Same left/right-moves-the-caret redirect as handleKeyEventAction's D-pad case,
@@ -1210,13 +1208,18 @@ class ControllerAccessibilityService : AccessibilityService() {
         // D-pad is held (unlike a KeyEvent, which fires once per press), so acting on
         // every tick would blow through the whole field in a fraction of a second instead
         // of moving one character at a time. HAT path only sets/clears its own claim.
+        // Rising edge: claim ownership and move caret. Falling edge: release ownership.
         if (keyboardOpenNotDragging) {
-            val leftActive = hatX < -0.5f
-            val rightActive = hatX > 0.5f
-            if (leftActive && dpadCaretLeftOwner == DpadCaretOwner.NONE) moveCaret(-1)
-            if (rightActive && dpadCaretRightOwner == DpadCaretOwner.NONE) moveCaret(1)
-            if (leftActive) dpadCaretLeftOwner = DpadCaretOwner.HAT else if (!leftActive && dpadCaretLeftOwner == DpadCaretOwner.HAT) dpadCaretLeftOwner = DpadCaretOwner.NONE
-            if (rightActive) dpadCaretRightOwner = DpadCaretOwner.HAT else if (!rightActive && dpadCaretRightOwner == DpadCaretOwner.HAT) dpadCaretRightOwner = DpadCaretOwner.NONE
+            val leftRising = hatX < -0.5f && lastHatX >= -0.5f
+            val rightRising = hatX > 0.5f && lastHatX <= 0.5f
+            val leftFalling = hatX >= -0.5f && lastHatX < -0.5f
+            val rightFalling = hatX <= 0.5f && lastHatX > 0.5f
+            if (leftRising && dpadCaretLeftOwner == DpadCaretOwner.NONE) moveCaret(-1)
+            if (rightRising && dpadCaretRightOwner == DpadCaretOwner.NONE) moveCaret(1)
+            if (leftRising) dpadCaretLeftOwner = DpadCaretOwner.HAT
+            if (rightRising) dpadCaretRightOwner = DpadCaretOwner.HAT
+            if (leftFalling && dpadCaretLeftOwner == DpadCaretOwner.HAT) dpadCaretLeftOwner = DpadCaretOwner.NONE
+            if (rightFalling && dpadCaretRightOwner == DpadCaretOwner.HAT) dpadCaretRightOwner = DpadCaretOwner.NONE
         } else {
             // Keyboard closed or being dragged: clear HAT claims so they don't stick.
             if (dpadCaretLeftOwner == DpadCaretOwner.HAT) dpadCaretLeftOwner = DpadCaretOwner.NONE
@@ -1248,6 +1251,10 @@ class ControllerAccessibilityService : AccessibilityService() {
             .takeIf { it != 0f } ?: inputMapper.axisValue(event, MotionEvent.AXIS_GAS)
         handleTrigger(ControllerInput.TRIGGER_L2, leftTrigger)
         handleTrigger(ControllerInput.TRIGGER_R2, rightTrigger)
+
+        // Update last values AFTER all edge detection so next tick can compare against them.
+        lastHatX = hatX
+        lastHatY = hatY
 
         return true
     }
