@@ -78,6 +78,11 @@ class ControllerAccessibilityService : AccessibilityService() {
     private var motionCaptureView: MotionCaptureView? = null
     private val activeTriggerJobs = mutableMapOf<ControllerInput, Job>()
     private val triggerHeldState = mutableMapOf<ControllerInput, Boolean>()
+    // Edge state for HAT-axis D-pad left/right, so caret movement fires once per press
+    // instead of once per motion event (which arrives many times a second while held —
+    // see the caret-move branch in handleGenericMotion).
+    private var hatLeftHeld = false
+    private var hatRightHeld = false
     private var lastStickScrollTimeMs = 0L
 
     // Lifecycle-scoped: every coroutine this service launches (trigger repeats,
@@ -89,6 +94,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     private var voiceBridgeServer: VoiceBridgeServer? = null
     private var legendTickJob: Job? = null
     private var focusWatchdogJob: Job? = null
+    private var backspaceHoldJob: Job? = null
 
     // Push-to-talk state — A2: coroutine-driven recording with a sized AudioRecord
     // buffer and real cancellation, instead of a raw busy-read Thread.
@@ -201,6 +207,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (::voiceManager.isInitialized) voiceManager.shutdown()
         legendTickJob?.cancel()
         focusWatchdogJob?.cancel()
+        backspaceHoldJob?.cancel()
         // Cancels every remaining child coroutine (trigger jobs, legend tick,
         // focus watchdog, any in-flight voice job) in one place — the actual
         // fix for A5, everything above is defense in depth for early bail-outs.
@@ -265,12 +272,15 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonDown()
                 } else {
                     handleButtonDown(input, action)
+                    armBackspaceHold(action)
                 }
             }
             KeyEvent.ACTION_UP -> {
                 if (action.type == ActionType.VOICE_TRIGGER) {
                     Log.d(TAG, "PTT up received (captured view, input=$input)")
                     pttController.onButtonUp()
+                } else {
+                    disarmBackspaceHold()
                 }
             }
         }
@@ -297,14 +307,17 @@ class ControllerAccessibilityService : AccessibilityService() {
                     pttController.onButtonDown()
                 } else {
                     handleButtonDown(input, action)
+                    armBackspaceHold(action)
                 }
             }
             KeyEvent.ACTION_UP -> {
-                // Only voice-trigger cares about release; every other action already
-                // fired on ACTION_DOWN above, matching the original tap-on-press model.
+                // Voice-trigger and backspace-hold care about release; every other action
+                // already fired on ACTION_DOWN above, matching the original tap-on-press model.
                 if (action.type == ActionType.VOICE_TRIGGER) {
                     Log.d(TAG, "PTT up received (a11y filter, input=$input)")
                     pttController.onButtonUp()
+                } else {
+                    disarmBackspaceHold()
                 }
             }
         }
@@ -363,6 +376,18 @@ class ControllerAccessibilityService : AccessibilityService() {
                 KeyEvent.KEYCODE_DPAD_RIGHT -> keyboardOverlay.nudgePosition(step, 0)
                 else -> Log.w(TAG, "keyCode=${action.keyCode} has no public injection path; ignoring")
             }
+            return
+        }
+        // While the keyboard is open (but not being dragged), left/right moves the TEXT
+        // CARET inside the focused field instead of the on-screen pointer — up/down and
+        // the analog stick still aim the pointer, so there's still a way to tap something
+        // outside the keyboard (e.g. Send) without closing it. Reported live 2026-09-19:
+        // "left and right moves the mouse cursor and not the caret for typing dictation" —
+        // until now there was no way to move the caret at all.
+        if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() &&
+            (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT || action.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)
+        ) {
+            moveCaret(if (action.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1)
             return
         }
         when (action.keyCode) {
@@ -781,6 +806,20 @@ class ControllerAccessibilityService : AccessibilityService() {
      * `rootInActiveWindow` lookup almost always resolves to this service's own
      * permanently-focused MotionCaptureView, not whatever app the user is dictating
      * into — this was silently swallowing every voice transcript before the fix. */
+    /** Where in [current] a typed/deleted/inserted char belongs: the field's own reported
+     * caret when it's in range, else the end. Every text-mutation call below shares this
+     * so "where does this land" is answered the same way everywhere — before this, only
+     * deleteNextOnce/commitTextOnce respected a real caret position; typeCharacter,
+     * typeText, injectText, and backspaceOnce always assumed "the end," so once
+     * [moveCaret] gave the user a way to park the caret mid-field, those calls kept
+     * acting on the end anyway instead of where the user was actually pointed. Reported
+     * live 2026-09-19: "it's still printing what it wants to print... I can't [move]...
+     * the caret for typing dictation." */
+    private fun caretIndex(node: AccessibilityNodeInfo, current: String): Int {
+        val sel = node.textSelectionStart
+        return if (sel in 0..current.length) sel else current.length
+    }
+
     private fun injectText(text: String) {
         try {
             val focused = typingTarget()
@@ -794,7 +833,8 @@ class ControllerAccessibilityService : AccessibilityService() {
                 // wiped out whatever the first one wrote instead of adding to it.
                 focused.refresh()
                 val current = focused.text?.toString().orEmpty()
-                injectFocusedText(focused, current + text)
+                val at = caretIndex(focused, current)
+                injectFocusedText(focused, current.substring(0, at) + text + current.substring(at))
             } else {
                 Log.w(TAG, "No focused node for text injection")
             }
@@ -803,37 +843,42 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Appends one key's worth of text to whatever is focused — used by KeyboardActivity,
-     * which types incrementally rather than dropping a whole utterance at once. */
+    /** Inserts one key's worth of text at the caret — used by KeyboardActivity, which
+     * types incrementally rather than dropping a whole utterance at once. */
     fun typeCharacter(ch: String) {
         try {
             val focused = typingTarget() ?: return
             val current = focused.text?.toString().orEmpty()
-            injectFocusedText(focused, current + ch)
+            val at = caretIndex(focused, current)
+            injectFocusedText(focused, current.substring(0, at) + ch + current.substring(at))
         } catch (e: Exception) {
             Log.e(TAG, "typeCharacter failed", e)
         }
     }
 
-    /** Appends a whole string in one accessibility call — used by KeyboardActivity's
-     * pinned-snippet buttons, so a multi-word pin doesn't cost one call per character. */
+    /** Inserts a whole string at the caret in one accessibility call — used by
+     * KeyboardActivity's pinned-snippet buttons, so a multi-word pin doesn't cost one
+     * call per character. */
     fun typeText(text: String) {
         try {
             val focused = typingTarget() ?: return
             val current = focused.text?.toString().orEmpty()
-            injectFocusedText(focused, current + text)
+            val at = caretIndex(focused, current)
+            injectFocusedText(focused, current.substring(0, at) + text + current.substring(at))
         } catch (e: Exception) {
             Log.e(TAG, "typeText failed", e)
         }
     }
 
-    /** Removes the last character of the focused field's text — KeyboardActivity's backspace. */
+    /** Removes the character before the caret — KeyboardActivity's backspace, and the
+     * desktop profile's B/Bksp slot. */
     fun backspaceOnce() {
         try {
             val focused = typingTargetOrWarn("backspaceOnce") ?: return
             val current = focused.text?.toString().orEmpty()
-            if (current.isEmpty()) return
-            injectFocusedText(focused, current.dropLast(1))
+            val at = caretIndex(focused, current)
+            if (at <= 0) return
+            injectFocusedText(focused, current.substring(0, at - 1) + current.substring(at))
         } catch (e: Exception) {
             Log.e(TAG, "backspaceOnce failed", e)
         }
@@ -877,15 +922,74 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Commits [text] verbatim to the focused field at the cursor — the RS "Enter" slot. */
+    /** Commits [text] verbatim to the focused field at the caret — the RS "Enter" slot. */
     fun commitTextOnce(text: String) {
         try {
             val focused = typingTargetOrWarn("commitTextOnce") ?: return
             val current = focused.text?.toString().orEmpty()
-            val sel = if (focused.textSelectionStart in 0..current.length) focused.textSelectionStart else current.length
-            injectFocusedText(focused, current.substring(0, sel) + text + current.substring(sel))
+            val at = caretIndex(focused, current)
+            injectFocusedText(focused, current.substring(0, at) + text + current.substring(at))
         } catch (e: Exception) {
             Log.e(TAG, "commitTextOnce failed", e)
+        }
+    }
+
+    /** Moves the text caret in the focused field by [delta] characters (±1) — the D-pad
+     * left/right slot while the keyboard is open (see handleKeyEventAction and the HAT-axis
+     * branch in handleGenericMotion). Sets a zero-width selection via ACTION_SET_SELECTION
+     * so every text-mutation call above, which reads textSelectionStart via [caretIndex],
+     * sees the new position. Reported live 2026-09-19: "left and right moves the mouse
+     * cursor and not the caret for typing dictation" — there was previously no way to move
+     * the caret at all. */
+    private fun moveCaret(delta: Int) {
+        try {
+            val focused = typingTargetOrWarn("moveCaret") ?: return
+            val current = focused.text?.toString().orEmpty()
+            val at = caretIndex(focused, current)
+            val next = (at + delta).coerceIn(0, current.length)
+            val args = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, next)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, next)
+            }
+            focused.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+        } catch (e: Exception) {
+            Log.e(TAG, "moveCaret failed", e)
+        }
+    }
+
+    /** Starts the hold-timer for B/Bksp only; every other action already fired in full on
+     * ACTION_DOWN and has nothing to do on a hold. Reported live 2026-09-19: "I have to
+     * press B, I can't hold it to delete a whole line." */
+    private fun armBackspaceHold(action: ButtonAction) {
+        if (action.type != ActionType.TEXT_EDIT || action.textOp != TextEditOp.BACKSPACE) return
+        backspaceHoldJob?.cancel()
+        backspaceHoldJob = serviceScope.launch {
+            delay(BACKSPACE_HOLD_MS)
+            deleteToLineStart()
+        }
+    }
+
+    private fun disarmBackspaceHold() {
+        backspaceHoldJob?.cancel()
+        backspaceHoldJob = null
+    }
+
+    /** B held past [BACKSPACE_HOLD_MS]: clears from the caret back to the start of the
+     * current line (the last '\n' at-or-before the caret, or the field start) in one shot.
+     * For the common single-line field (no '\n' at all) this clears everything from the
+     * start of the field up to the caret — with no prior caret movement, that's the whole
+     * field, matching what was asked for. */
+    private fun deleteToLineStart() {
+        try {
+            val focused = typingTargetOrWarn("deleteToLineStart") ?: return
+            val current = focused.text?.toString().orEmpty()
+            if (current.isEmpty()) return
+            val at = caretIndex(focused, current)
+            if (at <= 0) return
+            val lineStart = current.lastIndexOf('\n', at - 1) + 1
+            injectFocusedText(focused, current.substring(0, lineStart) + current.substring(at))
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteToLineStart failed", e)
         }
     }
 
@@ -1036,9 +1140,31 @@ class ControllerAccessibilityService : AccessibilityService() {
         // the actual signal this controller sends.
         val hatX = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_X)
         val hatY = inputMapper.axisValue(event, MotionEvent.AXIS_HAT_Y)
+        val keyboardOpenNotDragging = ::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() &&
+            !keyboardOverlay.isDragging()
+        // Same left/right-moves-the-caret redirect as handleKeyEventAction's D-pad case,
+        // but edge-detected: this event fires continuously while the D-pad is held (unlike
+        // a KeyEvent, which fires once per press), so acting on every tick would blow
+        // through the whole field in a fraction of a second instead of moving one character
+        // at a time.
+        if (keyboardOpenNotDragging) {
+            val leftActive = hatX < -0.5f
+            val rightActive = hatX > 0.5f
+            if (leftActive && !hatLeftHeld) moveCaret(-1)
+            if (rightActive && !hatRightHeld) moveCaret(1)
+            hatLeftHeld = leftActive
+            hatRightHeld = rightActive
+        } else {
+            hatLeftHeld = false
+            hatRightHeld = false
+        }
         if (hatX != 0f || hatY != 0f) {
             if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing() && keyboardOverlay.isDragging()) {
                 keyboardOverlay.nudgePosition((hatX * CURSOR_SPEED_PX).toInt(), (hatY * CURSOR_SPEED_PX).toInt())
+            } else if (keyboardOpenNotDragging) {
+                // Left/right already handled above (caret); up/down still nudges the pointer
+                // so there's a way to aim at something outside the keyboard while it's open.
+                if (hatY != 0f) cursorOverlay.applyDelta(0f, hatY * CURSOR_SPEED_PX)
             } else {
                 cursorOverlay.applyDelta(hatX * CURSOR_SPEED_PX, hatY * CURSOR_SPEED_PX)
             }
@@ -1261,6 +1387,10 @@ class ControllerAccessibilityService : AccessibilityService() {
         private const val FOCUS_WATCHDOG_INTERVAL_MS = 150L
         private const val LEGEND_TICK_INTERVAL_MS = 100L
         private const val MAX_RECORDING_MS = 30_000L
+        /** How long B must be held before it clears the whole current line instead of
+         * one character. Long enough that a normal tap-tap-tap backspace rhythm never
+         * fires it by accident, short enough that a deliberate hold doesn't feel laggy. */
+        private const val BACKSPACE_HOLD_MS = 500L
 
         /** Set while the service is bound; lets the UI reflect live enabled state. */
         var instance: ControllerAccessibilityService? = null

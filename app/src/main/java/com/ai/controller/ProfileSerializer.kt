@@ -26,8 +26,21 @@ object ProfileSerializer {
      * bug fixed below (which turned that JSON null into the literal string "null" on
      * read, since `\n` != "null"), RS silently did nothing — reported live as "I still
      * can't press enter." Bumping rev forces every on-device profile back through
-     * default(), where BUTTON_THUMBR carries its real "\n" payload again. */
-    private const val REV = 3
+     * default(), where BUTTON_THUMBR carries its real "\n" payload again.
+     *
+     * rev 4, 2026-09-19: RS/Enter was still reported broken live on-device *after* the
+     * rev-3 fix above had already shipped and been installed. The likely explanation:
+     * an app build installed between the original bug and the rev-3 fix could itself
+     * have re-serialized a rev-3 profile while BUTTON_THUMBR's textPayload was still the
+     * corrupted "null" string (the optString bug wrote it; nothing about writing a
+     * profile back out would have noticed or repaired that) — and once a profile is
+     * already at rev 3, `rev < REV` no longer re-triggers the migration, so that
+     * corruption would be permanent on that specific device no matter how many further
+     * code fixes ship. Bumping rev again is a one-time safety net: any profile written
+     * before this point — corrupted or not — gets one more forced pass through
+     * default(), guaranteeing a clean BUTTON_THUMBR mapping regardless of what's
+     * already on disk. */
+    private const val REV = 4
 
     fun serialize(profile: ControllerProfile): JSONObject {
         val root = JSONObject()
