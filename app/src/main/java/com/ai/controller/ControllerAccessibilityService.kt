@@ -468,6 +468,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     private fun startCustomKeyboard() {
         if (!keyboardOverlay.isShowing()) {
             keyboardTypingTarget = findEditableTarget()
+            selectAllOnFreshFocus(keyboardTypingTarget)
         }
         keyboardOverlay.toggle()
         if (!keyboardOverlay.isShowing()) {
@@ -479,6 +480,34 @@ class ControllerAccessibilityService : AccessibilityService() {
             cursorOverlay.raise()
         }
         showDebug(if (keyboardOverlay.isShowing()) "Kbd: shown" else "Kbd: hidden")
+    }
+
+    /** Selects a freshly-focused field's entire current text, so the first keystroke
+     * replaces it instead of landing after it. Reported live 2026-09-20: "the harness...
+     * doesn't put a text cursor up there... instead of deleting [the placeholder] to have
+     * a clean text space, it just adds to the end" — a search/URL bar's "type or enter
+     * url" hint text (or any pre-existing content) was never selected, and every
+     * text-mutation function falls back to "insert at the end" when a field has no
+     * selection at all, so nothing ever cleared it. A real tap into a field like this
+     * normally leaves it fully selected via the app's own focus handling; this app
+     * captures focus through the accessibility API instead of a real touch, so that
+     * never happened on its own — this establishes the same selection explicitly. Only
+     * runs once per fresh keyboard-open (not on every keystroke), so resuming a
+     * partially-typed field across keyboard toggles doesn't keep wiping it. */
+    private fun selectAllOnFreshFocus(node: AccessibilityNodeInfo?) {
+        val target = node ?: return
+        try {
+            target.refresh()
+            val length = target.text?.length ?: 0
+            if (length <= 0) return
+            val args = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, length)
+            }
+            target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+        } catch (e: Exception) {
+            Log.w(TAG, "selectAllOnFreshFocus failed", e)
+        }
     }
 
     /**
@@ -882,6 +911,24 @@ class ControllerAccessibilityService : AccessibilityService() {
         return if (sel in 0..current.length) sel else current.length
     }
 
+    /** Where in [current] a mutation should apply, as a (start, end) range — the field's
+     * own reported selection when both ends are in range, else a collapsed point at the
+     * end. Typing/deleting with a real selection active (start != end) replaces/removes
+     * the whole selection, matching every normal text editor's behavior, instead of only
+     * ever acting relative to a single insertion point. Without this, a field whose
+     * selection was just set to "everything" (see startCustomKeyboard) would still only
+     * insert at the selection's start, leaving the "selected" text sitting untouched
+     * right after it instead of being replaced. */
+    private fun caretRange(node: AccessibilityNodeInfo, current: String): Pair<Int, Int> {
+        val start = node.textSelectionStart
+        val end = node.textSelectionEnd
+        return if (start in 0..current.length && end in 0..current.length) {
+            minOf(start, end) to maxOf(start, end)
+        } else {
+            current.length to current.length
+        }
+    }
+
     private fun injectText(text: String) {
         try {
             val focused = typingTarget()
@@ -895,8 +942,8 @@ class ControllerAccessibilityService : AccessibilityService() {
                 // wiped out whatever the first one wrote instead of adding to it.
                 focused.refresh()
                 val current = focused.text?.toString().orEmpty()
-                val at = caretIndex(focused, current)
-                injectFocusedText(focused, current.substring(0, at) + text + current.substring(at))
+                val (start, end) = caretRange(focused, current)
+                injectFocusedText(focused, current.substring(0, start) + text + current.substring(end))
             } else {
                 Log.w(TAG, "No focused node for text injection")
             }
@@ -905,42 +952,47 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Inserts one key's worth of text at the caret — used by KeyboardActivity, which
-     * types incrementally rather than dropping a whole utterance at once. */
+    /** Inserts one key's worth of text, replacing any active selection — used by
+     * KeyboardActivity, which types incrementally rather than dropping a whole utterance
+     * at once. */
     fun typeCharacter(ch: String) {
         try {
             val focused = typingTarget() ?: return
             val current = focused.text?.toString().orEmpty()
-            val at = caretIndex(focused, current)
-            injectFocusedText(focused, current.substring(0, at) + ch + current.substring(at))
+            val (start, end) = caretRange(focused, current)
+            injectFocusedText(focused, current.substring(0, start) + ch + current.substring(end))
         } catch (e: Exception) {
             Log.e(TAG, "typeCharacter failed", e)
         }
     }
 
-    /** Inserts a whole string at the caret in one accessibility call — used by
-     * KeyboardActivity's pinned-snippet buttons, so a multi-word pin doesn't cost one
-     * call per character. */
+    /** Inserts a whole string in one accessibility call, replacing any active selection —
+     * used by KeyboardActivity's pinned-snippet buttons, so a multi-word pin doesn't cost
+     * one call per character. */
     fun typeText(text: String) {
         try {
             val focused = typingTarget() ?: return
             val current = focused.text?.toString().orEmpty()
-            val at = caretIndex(focused, current)
-            injectFocusedText(focused, current.substring(0, at) + text + current.substring(at))
+            val (start, end) = caretRange(focused, current)
+            injectFocusedText(focused, current.substring(0, start) + text + current.substring(end))
         } catch (e: Exception) {
             Log.e(TAG, "typeText failed", e)
         }
     }
 
-    /** Removes the character before the caret — KeyboardActivity's backspace, and the
-     * desktop profile's B/Bksp slot. */
+    /** Removes the active selection if there is one, else the character before the caret —
+     * KeyboardActivity's backspace, and the desktop profile's B/Bksp slot. */
     fun backspaceOnce() {
         try {
             val focused = typingTargetOrWarn("backspaceOnce") ?: return
             val current = focused.text?.toString().orEmpty()
-            val at = caretIndex(focused, current)
-            if (at <= 0) return
-            injectFocusedText(focused, current.substring(0, at - 1) + current.substring(at))
+            val (start, end) = caretRange(focused, current)
+            if (start != end) {
+                injectFocusedText(focused, current.substring(0, start) + current.substring(end))
+                return
+            }
+            if (start <= 0) return
+            injectFocusedText(focused, current.substring(0, start - 1) + current.substring(start))
         } catch (e: Exception) {
             Log.e(TAG, "backspaceOnce failed", e)
         }
@@ -963,29 +1015,35 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Forward-delete: drops the character after the cursor. Uses the selection cursor
-     * when the field exposes one; falls back to a cursor-position-aware edit on the
-     * field's text so a mid-field caret is honored when available. */
+    /** Forward-delete: removes the active selection if there is one, else the character
+     * after the caret. Uses the selection cursor when the field exposes one; falls back to
+     * a cursor-position-aware edit on the field's text so a mid-field caret is honored
+     * when available. */
     fun deleteNextOnce() {
         try {
             val focused = typingTargetOrWarn("deleteNextOnce") ?: return
             val current = focused.text?.toString().orEmpty()
             if (current.isEmpty()) return
-            val at = caretIndex(focused, current)
-            if (at >= current.length) return
-            injectFocusedText(focused, current.substring(0, at) + current.substring(at + 1))
+            val (start, end) = caretRange(focused, current)
+            if (start != end) {
+                injectFocusedText(focused, current.substring(0, start) + current.substring(end))
+                return
+            }
+            if (start >= current.length) return
+            injectFocusedText(focused, current.substring(0, start) + current.substring(start + 1))
         } catch (e: Exception) {
             Log.e(TAG, "deleteNextOnce failed", e)
         }
     }
 
-    /** Commits [text] verbatim to the focused field at the caret — the RS "Enter" slot. */
+    /** Commits [text] verbatim to the focused field at the caret, replacing any active
+     * selection — the RS "Enter" slot. */
     fun commitTextOnce(text: String) {
         try {
             val focused = typingTargetOrWarn("commitTextOnce") ?: return
             val current = focused.text?.toString().orEmpty()
-            val at = caretIndex(focused, current)
-            injectFocusedText(focused, current.substring(0, at) + text + current.substring(at))
+            val (start, end) = caretRange(focused, current)
+            injectFocusedText(focused, current.substring(0, start) + text + current.substring(end))
         } catch (e: Exception) {
             Log.e(TAG, "commitTextOnce failed", e)
         }
