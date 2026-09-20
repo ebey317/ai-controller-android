@@ -482,7 +482,7 @@ class ControllerAccessibilityService : AccessibilityService() {
             val target = keyboardTypingTarget
             val identity = target?.let(::fieldIdentity)
             if (identity != null && identity != lastFreshFocusIdentity) {
-                selectAllOnFreshFocus(target)
+                clearOnFreshFocus(target)
                 lastFreshFocusIdentity = identity
             }
         }
@@ -515,35 +515,35 @@ class ControllerAccessibilityService : AccessibilityService() {
         return FieldIdentity(node.windowId, node.packageName, node.viewIdResourceName, bounds)
     }
 
-    /** Selects a freshly-focused field's entire current text, so the first keystroke
-     * replaces it instead of landing after it. Reported live 2026-09-20: "the harness...
-     * doesn't put a text cursor up there... instead of deleting [the placeholder] to have
-     * a clean text space, it just adds to the end" — a search/URL bar's "type or enter
-     * url" hint text (or any pre-existing content) was never selected, and every
-     * text-mutation function falls back to "insert at the end" when a field has no
-     * selection at all, so nothing ever cleared it. A real tap into a field like this
-     * normally leaves it fully selected via the app's own focus handling; this app
-     * captures focus through the accessibility API instead of a real touch, so that
-     * never happened on its own — this establishes the same selection explicitly. Only
-     * runs once per fresh keyboard-open on a genuinely new field (see FieldIdentity
-     * above), so resuming a partially-typed field across keyboard toggles doesn't keep
-     * wiping it. */
-    private fun selectAllOnFreshFocus(node: AccessibilityNodeInfo?) {
+    /** Clears a freshly-focused field's entire current text, so the next keystroke starts
+     * clean instead of landing after whatever was already there. Reported live
+     * 2026-09-20: "the harness... doesn't put a text cursor up there... instead of
+     * deleting [the placeholder] to have a clean text space, it just adds to the end" —
+     * and, after a first attempt at this via ACTION_SET_SELECTION (select-all, then rely
+     * on typing to replace it) still didn't work live: "Android framework is different
+     * from Linux... you're missing a key distinction." That distinction: on Linux this
+     * project's desktop build can inject real keystrokes another app's own text widget
+     * processes natively (select-all, then a real keypress replaces the selection) — this
+     * app has no equivalent. AccessibilityService cannot inject real KeyEvents into
+     * another app's window without system-level INJECT_EVENTS permission (see the same
+     * limitation noted in handleKeyEventAction), so ACTION_SET_SELECTION establishing a
+     * real Android system selection state, honored the same way by every widget, was
+     * never guaranteed — and evidently wasn't honored by this widget. ACTION_SET_TEXT is
+     * the one primitive every text-mutation function in this file already uses
+     * successfully (typeCharacter, backspaceOnce, injectText, ...), so clearing the field
+     * outright with it sidesteps the question of whether a target widget honors selection
+     * actions at all. Only runs once per fresh keyboard-open on a genuinely new field (see
+     * FieldIdentity above), so resuming a partially-typed field across keyboard toggles
+     * doesn't keep wiping it. */
+    private fun clearOnFreshFocus(node: AccessibilityNodeInfo?) {
         val target = node ?: return
         try {
             target.refresh()
             val length = target.text?.length ?: 0
             if (length <= 0) return
-            val args = Bundle().apply {
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, length)
-            }
-            val success = target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
-            if (!success) {
-                Log.w(TAG, "selectAllOnFreshFocus: ACTION_SET_SELECTION not supported by focused view")
-            }
+            injectFocusedText(target, "")
         } catch (e: Exception) {
-            Log.w(TAG, "selectAllOnFreshFocus failed", e)
+            Log.w(TAG, "clearOnFreshFocus failed", e)
         }
     }
 
