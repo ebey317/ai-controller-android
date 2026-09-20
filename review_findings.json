@@ -1,0 +1,54 @@
+{
+	"findings": [
+		{
+			"id": "AI-IME-FONT-SIZE-BUG",
+			"severity": "error",
+			"file": "app/src/main/java/com/ai/controller/keyboard/AIInputMethodService.kt",
+			"line": 202,
+			"description": "AIInputMethodService.changeFontSize() only resizes buttons tracked in allButtons, but populateKeyGrid() clears allButtons at line 202 AFTER buildFontSizeRow() (A+/A- buttons) and buildStyleAndToneRow() (style mode buttons, skin tone picker) have already added their buttons. Font size changes therefore don't apply to font size controls, style buttons, skin tone picker, or pin buttons — only key grid and bottom row buttons. FloatingKeyboardOverlay correctly uses rebuildContent() to recreate all buttons.",
+			"action": "auto-fix",
+			"review_scope": "source"
+		},
+		{
+			"id": "PROFILE-SERIALIZER-REV4-DATA-LOSS",
+			"severity": "warning",
+			"file": "app/src/main/java/com/ai/controller/ProfileSerializer.kt",
+			"line": 83,
+			"description": "REV=4 migration (line 83-91) discards ALL user-customized button mappings from any profile with rev < 4, keeping only tuning values (sensitivity/deadzone/cursorEnabled/invertScroll). This is a breaking data-loss change for existing users. While the comment acknowledges this as acceptable for AntiMicroX parity, it must be explicitly documented in release notes so users know their custom mappings will be reset. Prior SER-1 finding was declined as ask-user for this reason.",
+			"action": "ask-user",
+			"review_scope": "source"
+		},
+		{
+			"id": "TEXTSTYLES-UNUSED-VARIABLE",
+			"severity": "warning",
+			"file": "app/src/main/java/com/ai/controller/TextStyles.kt",
+			"line": 101,
+			"description": "Line 101 assigns `val modifier = skinTone.modifier ?: return emoji` but line 109 uses `skinTone.modifier` directly instead of the local `modifier` variable. The variable is assigned but never read. Should use `modifier` on line 109 for consistency and to avoid the compiler warning.",
+			"action": "auto-fix",
+			"review_scope": "source"
+		},
+		{
+			"id": "MISSING-TESTS-FOR-NEW-LOGIC",
+			"severity": "warning",
+			"file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+			"line": 818,
+			"description": "The change introduces significant new pure/testable logic without corresponding tests: caretIndex() (line 818), moveCaret() (line 944), deleteToLineStart() (line 982), DriftCalibrator (new file), ContextSwitcher (new file), FloatingKeyboardOverlay (new file), InputMapper hysteresis (InputMapper.kt:57). AGENTS.md explicitly recommends adding JUnit tests for non-trivial logic in these pieces. No test suite exists in this port yet.",
+			"action": "ask-user",
+			"review_scope": "source"
+		},
+		{
+			"id": "TYPING-TARGET-CACHING-LIMITATION",
+			"severity": "info",
+			"file": "app/src/main/java/com/ai/controller/ControllerAccessibilityService.kt",
+			"line": 506,
+			"description": "typingTarget() caches keyboardTypingTarget when the floating keyboard is open (line 507-515). If the user switches focus to a different field while the keyboard is open (e.g., by tapping another text field), the cached target becomes stale. The comment acknowledges this trade-off: the overlay's own buttons re-touch the service's window, making live lookups unreliable. This is a documented known limitation, not a bug.",
+			"action": "no-op",
+			"review_scope": "source"
+		}
+	],
+	"tested": [],
+	"testing_summary": "No tests were run during review. Build compiles successfully (./gradlew compileDebugKotlin passes). No test suite exists in this Android port. The user is testing live on their own device in parallel.",
+	"risk_level": "medium",
+	"risk_rationale": "The core text-editing fixes (caret-aware mutations, D-pad/HAT caret movement, B-hold line clear) are well-implemented and match the stated intent. However, two functional bugs exist in newly added code (AIInputMethodService font size, TextStyles unused variable), and the REV=4 migration causes data loss for legacy profiles that requires explicit user communication. Missing tests for new pure logic increases regression risk.",
+	"risk_scope": "source-or-external"
+}

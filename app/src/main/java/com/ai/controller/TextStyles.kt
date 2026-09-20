@@ -106,7 +106,7 @@ object TextStyles {
                 val isPair = ch.isHighSurrogate() && i + 1 < emoji.length && emoji[i + 1].isLowSurrogate()
                 val cp = if (isPair) emoji.substring(i, i + 2) else ch.toString()
                 if (cp in toneableBases) {
-                    append(cp).append(skinTone.modifier)
+                    append(cp).append(modifier)
                     i += if (isPair) 2 else 1
                     if (i < emoji.length && emoji[i] == '️') { // U+FE0F variation selector
                         append(emoji[i]); i++
