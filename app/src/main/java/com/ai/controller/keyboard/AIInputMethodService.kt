@@ -200,6 +200,7 @@ class AIInputMethodService : InputMethodService() {
     }
 
     private fun populateKeyGrid(grid: LinearLayout) {
+        allButtons.clear()
         grid.removeAllViews()
         for (row in rowsLower) {
             val rowView = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
