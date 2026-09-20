@@ -971,14 +971,9 @@ class ControllerAccessibilityService : AccessibilityService() {
             val focused = typingTargetOrWarn("deleteNextOnce") ?: return
             val current = focused.text?.toString().orEmpty()
             if (current.isEmpty()) return
-            val sel = focused.textSelectionStart
-            if (sel in 0..current.length) {
-                if (sel >= current.length) return
-                injectFocusedText(focused, current.substring(0, sel) + current.substring(sel + 1))
-            } else {
-                // No selection info exposed: append-path has no "next" char, treat as no-op
-                // rather than guess (same honesty rule as the Linux legend's key labels).
-            }
+            val at = caretIndex(focused, current)
+            if (at >= current.length) return
+            injectFocusedText(focused, current.substring(0, at) + current.substring(at + 1))
         } catch (e: Exception) {
             Log.e(TAG, "deleteNextOnce failed", e)
         }
