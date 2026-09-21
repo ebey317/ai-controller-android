@@ -57,15 +57,28 @@ class InputMapper {
     /** Reads a named axis from a MotionEvent, defaulting to 0f when the device lacks it. */
     fun axisValue(event: MotionEvent, axis: Int): Float = event.getAxisValue(axis)
 
-    /** True once an analog trigger has crossed the "pressed" threshold. */
-    fun isTriggerActive(value: Float, threshold: Float = TRIGGER_THRESHOLD): Boolean =
-        value >= threshold
+    /** True once an analog trigger has crossed the "pressed" threshold, with hysteresis:
+     * while already active, only a drop below [releaseThreshold] (not the higher
+     * [pressThreshold]) clears it. A single fixed threshold let a trigger held near
+     * that value dither back and forth across it on ordinary analog noise, firing a
+     * fresh press/release edge on every crossing — for VOICE_TRIGGER this sliced one
+     * continuous PTT hold into several truncated recordings, and Whisper filled each
+     * fragment in with fluent but wrong text instead of failing loudly (live 2026-09-19:
+     * "I say one sentence and it emits something totally different"). The gap between
+     * the two thresholds is the dead zone noise can no longer cross twice. */
+    fun isTriggerActive(
+        value: Float,
+        currentlyActive: Boolean,
+        pressThreshold: Float = TRIGGER_PRESS_THRESHOLD,
+        releaseThreshold: Float = TRIGGER_RELEASE_THRESHOLD
+    ): Boolean = if (currentlyActive) value >= releaseThreshold else value >= pressThreshold
 
     /** Sign-preserving step size for discrete D-pad-style cursor nudges. */
     fun stepFor(axisValue: Float, stepSize: Float): Float =
         if (abs(axisValue) < 0.5f) 0f else sign(axisValue) * stepSize
 
     companion object {
-        const val TRIGGER_THRESHOLD = 0.4f
+        const val TRIGGER_PRESS_THRESHOLD = 0.5f
+        const val TRIGGER_RELEASE_THRESHOLD = 0.25f
     }
 }

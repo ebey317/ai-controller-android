@@ -15,3 +15,4 @@ local.properties
 
 # Local secret — never commit; copy groq_api_key.xml.example and fill in your own key
 app/src/main/res/values/groq_api_key.xml
+app/src/debug/res/values/groq_api_key.xml

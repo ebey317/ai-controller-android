@@ -75,9 +75,37 @@ class CursorOverlay(private val context: Context) {
             cursorView = view
             layoutParams = params
             attached = true
+            setTouchTransparent(true)
             handler.post(renderLoop)
         } catch (e: WindowManager.BadTokenException) {
             Log.e(TAG, "Failed to attach cursor overlay", e)
+        }
+    }
+
+    /**
+     * Ensures the cursor's footprint never intercepts touches meant for the
+     * app underneath (bug A1: the cursor overlay was found blocking touch
+     * under its footprint). FLAG_NOT_TOUCHABLE alone routes touches through
+     * to whatever is beneath the window; FLAG_NOT_FOCUSABLE additionally
+     * keeps the overlay from ever becoming the input-focused window. Both
+     * are applied at view-attach time above; this setter exists so the flag
+     * can be re-asserted explicitly (e.g. after a layout-param rebuild) and
+     * verified in tests without relying on constructor-time ordering.
+     */
+    fun setTouchTransparent(transparent: Boolean) {
+        val params = layoutParams ?: return
+        val view = cursorView ?: return
+        params.flags = if (transparent) {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        } else {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv() and
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        }
+        try {
+            windowManager.updateViewLayout(view, params)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "setTouchTransparent update failed, view not attached", e)
         }
     }
 
@@ -94,6 +122,30 @@ class CursorOverlay(private val context: Context) {
         }
         cursorView = null
         layoutParams = null
+    }
+
+    /** Re-adds the same view (position/state untouched) so it stacks above whatever
+     * else has been added to the window manager since — same-type overlay windows
+     * layer in add order, so a window added after this one (e.g. the on-screen
+     * keyboard) otherwise buries the cursor with no visual sign it still exists. */
+    fun raise() {
+        if (!attached) return
+        val view = cursorView ?: return
+        val params = layoutParams ?: return
+        try {
+            windowManager.removeView(view)
+            windowManager.addView(view, params)
+        } catch (e: Exception) {
+            // OCR finding: was IllegalArgumentException only, but removeView() can throw
+            // IllegalStateException (view not attached) and addView() can throw
+            // WindowManager.BadTokenException — this runs every time the keyboard opens
+            // (startCustomKeyboard calls it unconditionally), so an uncaught instance of
+            // either would crash the whole accessibility service on essentially any
+            // keyboard-open press, not just this one call.
+            Log.w(TAG, "raise failed, re-attaching cursor overlay", e)
+            hide()
+            show()
+        }
     }
 
     /** Nudges the movement target by a stick-derived delta, in pixels per tick. */

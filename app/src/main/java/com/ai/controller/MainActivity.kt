@@ -6,7 +6,10 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
+import android.view.View
 import android.view.inputmethod.InputMethodManager
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -15,10 +18,16 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.ai.controller.databinding.ActivityMainBinding
 import com.ai.controller.ui.SettingsActivity
+import com.ai.controller.ui.KeyboardActivity
 
 private const val RC_RECORD_AUDIO = 1001
 private const val PREFS_MAIN = "main"
 private const val KEY_SERVICE_ACTIVE = "service_active"
+
+// Same prefs file ControllerAccessibilityService reads (PROFILE_PREFS_NAME) — the
+// service's registered SharedPreferences listener picks up this flip live, no
+// rebind needed, so the debug overlay appears/disappears immediately on toggle.
+private const val PREFS_CONTROLLER = "ai_controller_prefs"
 
 /**
  * Top-level settings screen: enable/disable the accessibility service, tune
@@ -40,11 +49,35 @@ class MainActivity : AppCompatActivity() {
         profile = profileManager.loadProfile()
 
         bindControls()
+        maybeShowConsentDialog()
     }
 
     override fun onResume() {
         super.onResume()
         refreshServiceStatus()
+    }
+
+    /**
+     * A4: consent gate. Voice dictation sends microphone audio off-device to
+     * the Groq Whisper API — nothing may reach Groq until the user has seen
+     * and explicitly accepted that (see PRIVACY.md). This is shown once, on
+     * first launch or any time consent hasn't been granted yet; the flag is
+     * read by ControllerAccessibilityService before every recording.
+     */
+    private fun maybeShowConsentDialog() {
+        if (ConsentManager.isGranted(this)) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.consent_dialog_title)
+            .setMessage(R.string.consent_dialog_message)
+            .setCancelable(false)
+            .setPositiveButton(R.string.consent_dialog_accept) { _, _ ->
+                ConsentManager.setGranted(this, true)
+            }
+            .setNegativeButton(R.string.consent_dialog_decline) { _, _ ->
+                ConsentManager.setGranted(this, false)
+                showToast(getString(R.string.toast_consent_declined))
+            }
+            .show()
     }
 
     private fun bindControls() {
@@ -58,6 +91,29 @@ class MainActivity : AppCompatActivity() {
         binding.switchInvertScroll.setOnCheckedChangeListener { _, checked ->
             profile.invertScroll = checked
             profileManager.saveProfile(profile)
+        }
+
+        binding.switchDebugOverlay.isChecked = getDebugOverlayPref()
+        binding.switchDebugOverlay.setOnCheckedChangeListener { _, checked ->
+            setDebugOverlayPref(checked)
+        }
+
+        // Emoji skin tone — every customer picks their own; each option's label
+        // previews the tone on a ✌ emoji, so the choice shows what dictation
+        // will actually type. Applies immediately (TextStyles.SetSkinTone
+        // rebuilds the emoji tables) and persists via SkinToneStore.
+        binding.spinnerSkinTone.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            EmojiSkinTone.entries.map { it.label }
+        )
+        binding.spinnerSkinTone.setSelection(EmojiSkinTone.entries.indexOf(SkinToneStore.load(this)))
+        binding.spinnerSkinTone.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>, view: View?, pos: Int, id: Long) {
+                val tone = EmojiSkinTone.entries[pos]
+                SkinToneStore.save(this@MainActivity, tone)
+                TextStyles.setSkinTone(tone)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>) = Unit
         }
 
         binding.switchStartOnBoot.isChecked = getStartOnBootPref()
@@ -111,10 +167,25 @@ class MainActivity : AppCompatActivity() {
             setServiceActivePref(checked)
         }
 
+        binding.editGroqApiKey.setText(GroqKeyStore.load(this).orEmpty())
+        binding.buttonSaveGroqKey.setOnClickListener {
+            val key = binding.editGroqApiKey.text?.toString().orEmpty()
+            if (key.isBlank()) {
+                showToast(getString(R.string.toast_groq_key_empty))
+            } else {
+                GroqKeyStore.save(this, key)
+                showToast(getString(R.string.toast_groq_key_saved))
+            }
+        }
+
         binding.buttonTestKeyboard.setOnClickListener {
             binding.editTestInput.requestFocus()
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
             imm.showSoftInput(binding.editTestInput, InputMethodManager.SHOW_IMPLICIT)
+        }
+
+        binding.buttonOpenCustomKeyboard.setOnClickListener {
+            startActivity(Intent(this, KeyboardActivity::class.java))
         }
     }
 
@@ -182,6 +253,17 @@ class MainActivity : AppCompatActivity() {
             .putBoolean(KEY_SERVICE_ACTIVE, value)
             .apply()
         showToast(getString(if (value) R.string.toast_service_started else R.string.toast_service_stopped))
+    }
+
+    private fun getDebugOverlayPref(): Boolean =
+        getSharedPreferences(PREFS_CONTROLLER, MODE_PRIVATE)
+            .getBoolean(ControllerAccessibilityService.KEY_DEBUG_ENABLED, false)
+
+    private fun setDebugOverlayPref(value: Boolean) {
+        getSharedPreferences(PREFS_CONTROLLER, MODE_PRIVATE)
+            .edit()
+            .putBoolean(ControllerAccessibilityService.KEY_DEBUG_ENABLED, value)
+            .apply()
     }
 
     private fun getStartOnBootPref(): Boolean =

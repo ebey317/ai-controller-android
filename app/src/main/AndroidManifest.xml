@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.BIND_INPUT_METHOD" />
+    <uses-permission android:name="android.permission.BIND_INPUT_METHOD" tools:ignore="ProtectedPermissions" />
 
     <uses-feature
         android:name="android.hardware.gamepad"
@@ -38,6 +38,14 @@
             android:label="@string/settings_title"
             android:parentActivityName=".MainActivity" />
 
+        <activity
+            android:name=".ui.KeyboardActivity"
+            android:exported="false"
+            android:label="@string/keyboard_title"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="stateAlwaysHidden"
+            android:parentActivityName=".MainActivity" />
+
         <service
             android:name=".ControllerAccessibilityService"
             android:exported="true"
@@ -49,6 +57,19 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <service
+            android:name=".keyboard.AIInputMethodService"
+            android:exported="true"
+            android:label="@string/keyboard_subtype"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
         </service>
 
         <receiver
