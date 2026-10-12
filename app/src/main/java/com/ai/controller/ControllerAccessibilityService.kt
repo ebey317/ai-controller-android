@@ -173,11 +173,12 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     private fun setSoftKeyboardMode(show: Boolean) {
+        // SoftKeyboardController exists only on API 30+; guard for minSdk 26.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         try {
-            // SHOW_MODE_AUTO = 0, SHOW_MODE_HIDDEN = 1, SHOW_MODE_VISIBLE = 2
-            // Constants are not resolved by this build, so use raw ints.
-            val mode = if (show) 2 else 1
-            softKeyboardController.setShowMode(mode)
+            softKeyboardController.showMode =
+                if (show) AccessibilityService.SHOW_MODE_AUTO
+                else AccessibilityService.SHOW_MODE_HIDDEN
         } catch (e: Exception) {
             Log.e(TAG, "Failed to toggle soft keyboard", e)
         }
