@@ -24,6 +24,9 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    - name: Create placeholder Groq API key (CI stub for gitignored secret)
+      run: cp docs/groq_api_key.xml.example app/src/main/res/values/groq_api_key.xml
+
     - name: Lint (fails on errors)
       run: ./gradlew lintDebug --no-daemon
 
