@@ -119,17 +119,37 @@ class ControllerAccessibilityService : AccessibilityService() {
     // Idempotent guard: tracks the last KeyEvent (downTime, keyCode, action) handled
     // by either onKeyEvent (a11y filter) or handleCapturedKeyEvent (MotionCaptureView)
     // to prevent double-firing on devices where both paths deliver the same event.
+    @Volatile
     private var lastHandledKeyEvent: Triple<Long, Int, Int>? = null
     private val KEY_EVENT_RECENCY_MS = 50L
+
+    /**
+     * Single idempotency guard shared by both key paths (onKeyEvent a11y filter
+     * and handleCapturedKeyEvent view dispatch). Returns true if this exact
+     * KeyEvent was already handled via the other path within the recency window.
+     * Extracted so the two call sites can't drift apart.
+     */
+    private fun alreadyHandled(event: KeyEvent): Boolean {
+        val key = Triple(event.downTime, event.keyCode, event.action)
+        val last = lastHandledKeyEvent
+        if (last != null) {
+            val (lastDownTime, _, _) = last
+            if (key == last && (SystemClock.uptimeMillis() - lastDownTime) < KEY_EVENT_RECENCY_MS) {
+                return true
+            }
+        }
+        lastHandledKeyEvent = key
+        return false
+    }
 
     // Push-to-talk state — A2: coroutine-driven recording with a sized AudioRecord
     // buffer and real cancellation, instead of a raw busy-read Thread.
     private lateinit var pttController: PttController
-    private var audioRecord: AudioRecord? = null
-    private var voiceRecordJob: Job? = null
+    @Volatile private var audioRecord: AudioRecord? = null
+    @Volatile private var voiceRecordJob: Job? = null
     @Volatile private var isRecording = false
     @Volatile private var voiceRecordCancelled = false
-    private var recordStartElapsedMs = 0L
+    @Volatile private var recordStartElapsedMs = 0L
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == KEY_DEBUG_ENABLED) {
@@ -242,6 +262,8 @@ class ControllerAccessibilityService : AccessibilityService() {
         if (::legendOverlay.isInitialized) legendOverlay.hide()
         if (::debugOverlay.isInitialized) debugOverlay.hide()
         if (::keyboardOverlay.isInitialized) keyboardOverlay.hide()
+        keyboardTypingTarget?.recycle()
+        keyboardTypingTarget = null
         if (instance === this) instance = null
     }
 
@@ -288,17 +310,8 @@ class ControllerAccessibilityService : AccessibilityService() {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return false
         if (event.repeatCount > 0) return true
 
-        // Idempotent guard: skip if this exact KeyEvent was already handled
-        // via the other path (onKeyEvent) within the recency window.
-        val key = Triple(event.downTime, event.keyCode, event.action)
-        val last = lastHandledKeyEvent
-        if (last != null) {
-            val (lastDownTime, _, _) = last
-            if (key == last && (SystemClock.uptimeMillis() - lastDownTime) < KEY_EVENT_RECENCY_MS) {
-                return true
-            }
-        }
-        lastHandledKeyEvent = key
+        // Idempotent guard via the shared helper (see alreadyHandled).
+        if (alreadyHandled(event)) return true
 
         val action = inputMapper.resolveAction(profile, input)
         Log.d(TAG, "captured input=$input action=${action.type} profile=${profile.name}")
@@ -338,17 +351,8 @@ class ControllerAccessibilityService : AccessibilityService() {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return super.onKeyEvent(event)
         if (event.repeatCount > 0) return true // swallow OS auto-repeat; we drive our own timing
 
-        // Idempotent guard: skip if this exact KeyEvent was already handled
-        // via the other path (handleCapturedKeyEvent) within the recency window.
-        val key = Triple(event.downTime, event.keyCode, event.action)
-        val last = lastHandledKeyEvent
-        if (last != null) {
-            val (lastDownTime, _, _) = last
-            if (key == last && (SystemClock.uptimeMillis() - lastDownTime) < KEY_EVENT_RECENCY_MS) {
-                return true
-            }
-        }
-        lastHandledKeyEvent = key
+        // Idempotent guard via the shared helper (see alreadyHandled).
+        if (alreadyHandled(event)) return true
 
         val action = inputMapper.resolveAction(profile, input)
         Log.d(TAG, "onKeyEvent input=$input action=${action.type} profile=${profile.name}")
@@ -488,6 +492,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
         keyboardOverlay.toggle()
         if (!keyboardOverlay.isShowing()) {
+            keyboardTypingTarget?.recycle()
             keyboardTypingTarget = null
         } else {
             // The keyboard's own window was just added, which stacks it above the
@@ -571,15 +576,29 @@ class ControllerAccessibilityService : AccessibilityService() {
      * callers fall through the list until a field is actually found.
      */
     private fun externalAppRoots(): List<AccessibilityNodeInfo> {
-        val candidates = windows?.filter { it.root != null && it.root?.packageName != packageName }
-            ?: return emptyList()
-        return candidates
-            .sortedWith(
-                compareByDescending<AccessibilityWindowInfo> { it.isActive }
-                    .thenByDescending { it.isFocused }
-                    .thenByDescending { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            )
-            .mapNotNull { it.root }
+        val infos = windows ?: return emptyList()
+        // Pair each window with its root in one pass: the old filter called
+        // it.root twice, leaking a node per call, and never recycled the
+        // AccessibilityWindowInfo objects at all.
+        val pairs = mutableListOf<Pair<AccessibilityWindowInfo, AccessibilityNodeInfo>>()
+        for (info in infos) {
+            val root = info.root ?: continue
+            if (root.packageName == packageName) {
+                root.recycle()
+                continue
+            }
+            pairs.add(info to root)
+        }
+        return try {
+            pairs.sortedWith(
+                compareByDescending<Pair<AccessibilityWindowInfo, AccessibilityNodeInfo>> { it.first.isActive }
+                    .thenByDescending { it.first.isFocused }
+                    .thenByDescending { it.first.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            ).map { it.second }
+        } finally {
+            // Window infos are ours to recycle; the roots go to the caller.
+            pairs.forEach { it.first.recycle() }
+        }
     }
 
     /** First focused editable field across the candidate windows, falling back to the
@@ -587,20 +606,40 @@ class ControllerAccessibilityService : AccessibilityService() {
      * marking it input-focused, which is the other half of "doesn't print on every box." */
     private fun findEditableTarget(): AccessibilityNodeInfo? {
         val roots = externalAppRoots()
-        roots.forEach { root ->
-            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { return it }
+        var result: AccessibilityNodeInfo? = null
+        var resultRoot: AccessibilityNodeInfo? = null
+        for (root in roots) {
+            if (result == null) {
+                root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let {
+                    result = it
+                    resultRoot = root
+                }
+            }
+            if (result == null) {
+                firstEditableNode(root)?.let {
+                    result = it
+                    resultRoot = root
+                }
+            }
+            // Every root we own that didn't produce the match gets recycled here.
+            if (result == null || root !== resultRoot) {
+                if (root !== result) root.recycle()
+            }
         }
-        roots.forEach { root ->
-            firstEditableNode(root)?.let { return it }
-        }
-        return null
+        // The producing root is a separate reference from a subtree match —
+        // recycle it too, unless the match IS the root itself.
+        if (resultRoot != null && result !== resultRoot) resultRoot?.recycle()
+        return result
     }
 
     private fun firstEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         if (node.isEditable && node.isVisibleToUser) return node
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            firstEditableNode(child)?.let { return it }
+            val found = firstEditableNode(child)
+            if (found != null) return found
+            // This child's subtree held no match — recycle it, don't leak it.
+            child.recycle()
         }
         return null
     }
@@ -725,7 +764,19 @@ class ControllerAccessibilityService : AccessibilityService() {
         isRecording = true
         voiceRecordCancelled = false
         recordStartElapsedMs = SystemClock.elapsedRealtime()
-        recorder.startRecording()
+        try {
+            recorder.startRecording()
+        } catch (e: Exception) {
+            // startRecording() can throw (hardware error, revoked permission).
+            // Without this reset the service sits in "recording" with a dead
+            // recorder and the next PTT cycle never starts fresh.
+            Log.e(TAG, "recorder.startRecording() failed", e)
+            isRecording = false
+            audioRecord = null
+            recorder.release()
+            pttController.reset()
+            return
+        }
         showVoiceToast(true)
 
         // Coroutine instead of a raw Thread: cancellable via Job.cancel(), tied to
@@ -798,10 +849,9 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun processRecording(pcmBytes: ByteArray, sampleRate: Int) {
+        val wavFile = writeWavToCache(pcmBytes, sampleRate)
         try {
-            val wavFile = writeWavToCache(pcmBytes, sampleRate)
             val rawTranscript = transcribeWithGroq(wavFile)
-            wavFile.delete()
             if (rawTranscript.isNotBlank()) {
                 val mode = PttModeStore.load(applicationContext)
                 val styled = TextStyles.transform(rawTranscript, mode)
@@ -809,21 +859,24 @@ class ControllerAccessibilityService : AccessibilityService() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Voice transcription failed", e)
+        } finally {
+            // Temp file must die on failure too, not just the success path.
+            if (!wavFile.delete()) Log.w(TAG, "Could not delete temp wav ${wavFile.name}")
         }
     }
 
     /** Used by [VoiceBridgeServer]'s /voice route — same consent gate as the PTT path. */
     private suspend fun transcribeBytesIfConsented(wavBytes: ByteArray): String {
         if (!consentGranted()) return ""
+        val tmp = File(cacheDir, "bridge_voice_${System.currentTimeMillis()}.wav")
         return try {
-            val tmp = File(cacheDir, "bridge_voice_${System.currentTimeMillis()}.wav")
             FileOutputStream(tmp).use { it.write(wavBytes) }
-            val text = transcribeWithGroq(tmp)
-            tmp.delete()
-            text
+            transcribeWithGroq(tmp)
         } catch (e: Exception) {
             Log.e(TAG, "voice bridge transcription failed", e)
             ""
+        } finally {
+            if (!tmp.delete()) Log.w(TAG, "Could not delete temp wav ${tmp.name}")
         }
     }
 
@@ -921,12 +974,19 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
 
         val responseCode = conn.responseCode
-        val response = conn.inputStream.use { it.reader().readText() }
-        if (responseCode !in 200..299) {
-            throw IllegalStateException("Groq API error $responseCode: $response")
+        try {
+            // getInputStream() throws on HTTP errors — read errorStream instead
+            // so the real status/body survives instead of a generic failure.
+            val stream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
+            val response = stream?.use { it.reader().readText() } ?: ""
+            if (responseCode !in 200..299) {
+                throw IllegalStateException("Groq API error $responseCode: $response")
+            }
+            val json = JSONObject(response)
+            return json.optString("text", "").trim()
+        } finally {
+            conn.disconnect()
         }
-        val json = JSONObject(response)
-        return json.optString("text", "").trim()
     }
 
     /** Replaces the focused field's text — used for whole-utterance dictation drops.

@@ -117,8 +117,11 @@ object ProfileSerializer {
                         runCatching { TextEditOp.valueOf(op) }.getOrNull()
                     }
                 } else null
+                // isNotEmpty, not isNotBlank: the Enter key's payload is "\n",
+                // and "\n".isNotBlank() == false -- the old check silently nulled
+                // Enter on every serialize->deserialize round trip (app restart).
                 val textPayload = if (!actionJson.isNull("textPayload")) {
-                    actionJson.optString("textPayload", "").takeIf { it.isNotBlank() }
+                    actionJson.optString("textPayload", "").takeIf { it.isNotEmpty() }
                 } else null
                 mappings[input] = ButtonAction(
                     type = type,
