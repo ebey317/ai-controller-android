@@ -18,6 +18,8 @@ import com.ai.controller.KeyboardFontSizeStore
 import com.ai.controller.PinStore
 import com.ai.controller.PttModeStore
 import com.ai.controller.SkinToneStore
+import com.ai.controller.styleChar
+import com.ai.controller.styleLabel
 import com.ai.controller.TextStyles
 
 /**
@@ -35,7 +37,7 @@ import com.ai.controller.TextStyles
  * pipeline in [TextStyles.transform] only makes sense applied to a whole phrase, which
  * is exactly what pins are — so pins go through [TextStyles.transform] itself.
  */
-class AIInputMethodService : InputMethodService() {
+open class AIInputMethodService : InputMethodService() {
 
     private var shiftOn = false
     private lateinit var keyGrid: LinearLayout
@@ -124,14 +126,6 @@ class AIInputMethodService : InputMethodService() {
         })
         refreshStyleButtons()
         return HorizontalScrollView(this).apply { addView(row) }
-    }
-
-    private fun styleLabel(mode: TextStyles.Mode): String = when (mode) {
-        TextStyles.Mode.PRO -> "PRO"
-        TextStyles.Mode.BUBBLY -> "✨ " + TextStyles.toCursive("Cursive")
-        TextStyles.Mode.CASUAL -> "☕ casual"
-        TextStyles.Mode.BOLD -> TextStyles.toBold("Bold")
-        TextStyles.Mode.BIG -> TextStyles.toOldEnglish("Old-E")
     }
 
     private fun refreshStyleButtons() {
@@ -295,14 +289,7 @@ class AIInputMethodService : InputMethodService() {
 
     private fun commitStyledChar(ch: String) {
         val ic = currentInputConnection ?: return
-        val styled = when (currentMode()) {
-            TextStyles.Mode.BUBBLY -> TextStyles.toCursive(ch)
-            TextStyles.Mode.BOLD -> TextStyles.toBold(ch)
-            TextStyles.Mode.BIG -> TextStyles.toOldEnglish(ch)
-            TextStyles.Mode.CASUAL -> ch.lowercase()
-            TextStyles.Mode.PRO -> ch
-        }
-        ic.commitText(styled, 1)
+        ic.commitText(styleChar(ch, currentMode()), 1)
     }
 
     /** Pins commit through the full [TextStyles.transform] pipeline (keyword emoji +

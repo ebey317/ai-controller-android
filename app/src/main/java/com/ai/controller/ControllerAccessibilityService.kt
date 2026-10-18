@@ -129,7 +129,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * KeyEvent was already handled via the other path within the recency window.
      * Extracted so the two call sites can't drift apart.
      */
-    private fun alreadyHandled(event: KeyEvent): Boolean {
+    internal fun alreadyHandled(event: KeyEvent): Boolean {
         val key = Triple(event.downTime, event.keyCode, event.action)
         val last = lastHandledKeyEvent
         if (last != null) {
@@ -507,7 +507,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * id (when the view declares one), and screen position. A data class gets real
      * equals()/hashCode() for free, unlike AccessibilityNodeInfo itself, whose separate
      * instances for the same underlying view do not reliably compare equal. */
-    private data class FieldIdentity(
+    internal data class FieldIdentity(
         val windowId: Int,
         val packageName: CharSequence?,
         val viewIdResourceName: String?,
@@ -904,39 +904,8 @@ class ControllerAccessibilityService : AccessibilityService() {
         // Unique per recording: two rapid PTT takes ran processRecording concurrently
         // and both wrote/read/deleted the SHARED voice_prompt.wav — the loser hit
         // ENOENT (the exact "Voice transcription failed" stack). Unique names kill the race.
-        val wav = File(cacheDir, "voice_prompt_${System.currentTimeMillis()}_${(0..999).random()}.wav")
-        FileOutputStream(wav).use { fos ->
-            DataOutputStream(fos).use { out ->
-                val byteRate = sampleRate * 1 * 16 / 8
-                val totalDataLen = pcmBytes.size + 36
-
-                fun Int.toLittleEndian(): ByteArray = byteArrayOf(
-                    (this and 0xFF).toByte(),
-                    (this shr 8 and 0xFF).toByte(),
-                    (this shr 16 and 0xFF).toByte(),
-                    (this shr 24 and 0xFF).toByte()
-                )
-
-                fun Short.toLittleEndian(): ByteArray = byteArrayOf(
-                    (this.toInt() and 0xFF).toByte(),
-                    (this.toInt() shr 8 and 0xFF).toByte()
-                )
-
-                out.writeBytes("RIFF")
-                out.write(totalDataLen.toLittleEndian())
-                out.writeBytes("WAVEfmt ")
-                out.write(16.toLittleEndian())
-                out.write(1.toShort().toLittleEndian()) // PCM
-                out.write(1.toShort().toLittleEndian()) // mono
-                out.write(sampleRate.toLittleEndian())
-                out.write(byteRate.toLittleEndian())
-                out.write(2.toShort().toLittleEndian()) // block align
-                out.write(16.toShort().toLittleEndian()) // bits per sample
-                out.writeBytes("data")
-                out.write(pcmBytes.size.toLittleEndian())
-                out.write(pcmBytes)
-            }
-        }
+        val wav = File(cacheDir, "voice_prompt_" + System.currentTimeMillis() + "_" + (0..999).random() + ".wav")
+        FileOutputStream(wav).use { fos -> fos.write(pcmToWavBytes(pcmBytes, sampleRate)) }
         return wav
     }
 
@@ -1003,10 +972,8 @@ class ControllerAccessibilityService : AccessibilityService() {
      * acting on the end anyway instead of where the user was actually pointed. Reported
      * live 2026-09-19: "it's still printing what it wants to print... I can't [move]...
      * the caret for typing dictation." */
-    private fun caretIndex(node: AccessibilityNodeInfo, current: String): Int {
-        val sel = node.textSelectionStart
-        return if (sel in 0..current.length) sel else current.length
-    }
+    private fun caretIndex(node: AccessibilityNodeInfo, current: String): Int =
+        clampSelectionIndex(node.textSelectionStart, current.length)
 
     /** Where in [current] a mutation should apply, as a (start, end) range — the field's
      * own reported selection when both ends are in range, else a collapsed point at the
@@ -1016,15 +983,8 @@ class ControllerAccessibilityService : AccessibilityService() {
      * selection was just set to "everything" (see startCustomKeyboard) would still only
      * insert at the selection's start, leaving the "selected" text sitting untouched
      * right after it instead of being replaced. */
-    private fun caretRange(node: AccessibilityNodeInfo, current: String): Pair<Int, Int> {
-        val start = node.textSelectionStart
-        val end = node.textSelectionEnd
-        return if (start in 0..current.length && end in 0..current.length) {
-            minOf(start, end) to maxOf(start, end)
-        } else {
-            current.length to current.length
-        }
-    }
+    private fun caretRange(node: AccessibilityNodeInfo, current: String): Pair<Int, Int> =
+        selectionRange(node.textSelectionStart, node.textSelectionEnd, current.length)
 
     private fun injectText(text: String) {
         try {
@@ -1367,10 +1327,11 @@ class ControllerAccessibilityService : AccessibilityService() {
         // of moving one character at a time. HAT path only sets/clears its own claim.
         // Rising edge: claim ownership and move caret. Falling edge: release ownership.
         if (keyboardOpenNotDragging) {
-            val leftRising = hatX < -0.5f && lastHatX >= -0.5f
-            val rightRising = hatX > 0.5f && lastHatX <= 0.5f
-            val leftFalling = hatX >= -0.5f && lastHatX < -0.5f
-            val rightFalling = hatX <= 0.5f && lastHatX > 0.5f
+            val edges = detectHatEdges(hatX, lastHatX)
+            val leftRising = edges.leftRising
+            val rightRising = edges.rightRising
+            val leftFalling = edges.leftFalling
+            val rightFalling = edges.rightFalling
             if (leftRising && dpadCaretLeftOwner == DpadCaretOwner.NONE) moveCaret(-1)
             if (rightRising && dpadCaretRightOwner == DpadCaretOwner.NONE) moveCaret(1)
             if (leftRising) dpadCaretLeftOwner = DpadCaretOwner.HAT
@@ -1420,7 +1381,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         val now = SystemClock.uptimeMillis()
         if (now - lastStickScrollTimeMs < STICK_SCROLL_COOLDOWN_MS) return
         lastStickScrollTimeMs = now
-        val direction = if (sy < 0f) SwipeDirection.UP else SwipeDirection.DOWN
+        val direction = stickScrollDirection(sy)
         dispatchScroll(cursorOverlay.getPosition(), direction)
     }
 
@@ -1523,18 +1484,11 @@ class ControllerAccessibilityService : AccessibilityService() {
         distance: Float = SWIPE_DISTANCE_PX
     ) {
         val metrics = resources.displayMetrics
-        val (rawEndX, rawEndY) = when (direction) {
-            SwipeDirection.UP -> origin.x to (origin.y - distance)
-            SwipeDirection.DOWN -> origin.x to (origin.y + distance)
-            SwipeDirection.LEFT -> (origin.x - distance) to origin.y
-            SwipeDirection.RIGHT -> (origin.x + distance) to origin.y
-        }
-        val endX = rawEndX.coerceIn(0f, metrics.widthPixels.toFloat())
-        val endY = rawEndY.coerceIn(0f, metrics.heightPixels.toFloat())
+        val end = swipeEndPoint(origin, direction, distance, metrics.widthPixels, metrics.heightPixels)
 
         val path = Path().apply {
             moveTo(origin.x, origin.y)
-            lineTo(endX, endY)
+            lineTo(end.x, end.y)
         }
         val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceAtLeast(MIN_SWIPE_MS))
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
@@ -1592,6 +1546,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
+
     companion object {
         private const val TAG = "AIControllerService"
         private const val PROFILE_PREFS_NAME = "ai_controller_prefs"
@@ -1625,3 +1580,95 @@ class ControllerAccessibilityService : AccessibilityService() {
             private set
     }
 }
+
+// ---------------------------------------------------------------------------
+// Internal pure helpers, extracted verbatim from the methods above so they can
+// be unit-tested without the Android framework. Behavior unchanged.
+// ---------------------------------------------------------------------------
+
+/** D-pad hat-axis rising/falling edges for one tick, extracted from handleGenericMotion. */
+internal data class HatEdges(
+    val leftRising: Boolean,
+    val rightRising: Boolean,
+    val leftFalling: Boolean,
+    val rightFalling: Boolean
+)
+
+internal fun detectHatEdges(hatX: Float, lastHatX: Float): HatEdges = HatEdges(
+    leftRising = hatX < -0.5f && lastHatX >= -0.5f,
+    rightRising = hatX > 0.5f && lastHatX <= 0.5f,
+    leftFalling = hatX >= -0.5f && lastHatX < -0.5f,
+    rightFalling = hatX <= 0.5f && lastHatX > 0.5f
+)
+
+/** Right-stick Y sign to scroll direction, extracted from maybeDispatchStickScroll. */
+internal fun stickScrollDirection(sy: Float): SwipeDirection =
+    if (sy < 0f) SwipeDirection.UP else SwipeDirection.DOWN
+
+/** Swipe end point clamped to the display, extracted from dispatchSwipe. */
+internal fun swipeEndPoint(
+    origin: PointF,
+    direction: SwipeDirection,
+    distance: Float,
+    widthPx: Int,
+    heightPx: Int
+): PointF {
+    val (rawEndX, rawEndY) = when (direction) {
+        SwipeDirection.UP -> origin.x to (origin.y - distance)
+        SwipeDirection.DOWN -> origin.x to (origin.y + distance)
+        SwipeDirection.LEFT -> (origin.x - distance) to origin.y
+        SwipeDirection.RIGHT -> (origin.x + distance) to origin.y
+    }
+    return PointF(
+        rawEndX.coerceIn(0f, widthPx.toFloat()),
+        rawEndY.coerceIn(0f, heightPx.toFloat())
+    )
+}
+
+/** WAV header + PCM packing, extracted from writeWavToCache. Returns the full file bytes. */
+internal fun pcmToWavBytes(pcmBytes: ByteArray, sampleRate: Int): ByteArray {
+    val byteRate = sampleRate * 1 * 16 / 8
+    val totalDataLen = pcmBytes.size + 36
+
+    fun Int.toLittleEndian(): ByteArray = byteArrayOf(
+        (this and 0xFF).toByte(),
+        (this shr 8 and 0xFF).toByte(),
+        (this shr 16 and 0xFF).toByte(),
+        (this shr 24 and 0xFF).toByte()
+    )
+
+    fun Short.toLittleEndian(): ByteArray = byteArrayOf(
+        (this.toInt() and 0xFF).toByte(),
+        (this.toInt() shr 8 and 0xFF).toByte()
+    )
+
+    val out = ByteArrayOutputStream()
+    DataOutputStream(out).use { dos ->
+        dos.writeBytes("RIFF")
+        dos.write(totalDataLen.toLittleEndian())
+        dos.writeBytes("WAVEfmt ")
+        dos.write(16.toLittleEndian())
+        dos.write(1.toShort().toLittleEndian()) // PCM
+        dos.write(1.toShort().toLittleEndian()) // mono
+        dos.write(sampleRate.toLittleEndian())
+        dos.write(byteRate.toLittleEndian())
+        dos.write(2.toShort().toLittleEndian()) // block align
+        dos.write(16.toShort().toLittleEndian()) // bits per sample
+        dos.writeBytes("data")
+        dos.write(pcmBytes.size.toLittleEndian())
+        dos.write(pcmBytes)
+    }
+    return out.toByteArray()
+}
+
+/** Insertion-point clamp, extracted from caretIndex. */
+internal fun clampSelectionIndex(sel: Int, length: Int): Int =
+    if (sel in 0..length) sel else length
+
+/** Mutation range, extracted from caretRange. */
+internal fun selectionRange(start: Int, end: Int, length: Int): Pair<Int, Int> =
+    if (start in 0..length && end in 0..length) {
+        minOf(start, end) to maxOf(start, end)
+    } else {
+        length to length
+    }

@@ -151,10 +151,10 @@ class VoiceBridgeServer(
         }
     }
 
-    private fun isValidRoute(method: String, path: String): Boolean =
+    internal fun isValidRoute(method: String, path: String): Boolean =
         method == "POST" && (path.startsWith("/voice") || path.startsWith("/speak"))
 
-    private fun isAuthorized(providedToken: String?): Boolean {
+    internal fun isAuthorized(providedToken: String?): Boolean {
         if (providedToken == null) return false
         val expected = authToken.toByteArray(Charsets.UTF_8)
         val actual = providedToken.toByteArray(Charsets.UTF_8)
@@ -164,7 +164,7 @@ class VoiceBridgeServer(
     /** Reads one CRLF- or LF-terminated line from [input], one byte at a time, so
      * header parsing never reads past the blank line into body bytes that a
      * separate raw read would then miss (F5). */
-    private fun readLine(input: InputStream): String? {
+    internal fun readLine(input: InputStream): String? {
         val sb = StringBuilder()
         var b = input.read()
         if (b == -1) return null
@@ -175,7 +175,7 @@ class VoiceBridgeServer(
         return sb.toString()
     }
 
-    private fun writeResponse(out: OutputStream, status: Int, body: String) {
+    internal fun writeResponse(out: OutputStream, status: Int, body: String) {
         val statusText = when (status) {
             200 -> "OK"
             400 -> "Bad Request"
@@ -193,7 +193,7 @@ class VoiceBridgeServer(
         out.flush()
     }
 
-    private fun jsonEscape(s: String): String =
+    internal fun jsonEscape(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
 
     private fun generateToken(): String {

@@ -71,6 +71,13 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
 
     fun isShowing(): Boolean = rootView != null
 
+    /** Test-only: the built content tree, or null when hidden. */
+    internal fun contentRootForTest(): View? = rootView
+
+    /** Test-only: current window position, or null when hidden. */
+    internal fun windowPositionForTest(): Pair<Int, Int>? =
+        windowParams?.let { it.x to it.y }
+
     fun toggle() {
         if (isShowing()) hide() else show()
     }
@@ -197,10 +204,12 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
             params.x += dx
             params.y += dy
         } else {
-            val maxX = (metrics.widthPixels - viewW).coerceAtLeast(0)
-            val maxY = (metrics.heightPixels - viewH).coerceAtLeast(0)
-            params.x = (params.x + dx).coerceIn(0, maxX)
-            params.y = (params.y + dy).coerceIn(0, maxY)
+            val (newX, newY) = clampNudgePosition(
+                params.x, params.y, dx, dy, viewW, viewH,
+                metrics.widthPixels, metrics.heightPixels
+            )
+            params.x = newX
+            params.y = newY
         }
         try {
             windowManager.updateViewLayout(view, params)
@@ -262,7 +271,7 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
         return row
     }
 
-    private fun dragHandleLabel(): String = if (dragging) "✋ D-pad to move — click to drop" else "✥ Move"
+    internal fun dragHandleLabel(): String = if (dragging) "✋ D-pad to move — click to drop" else "✥ Move"
 
     private fun changeFontSize(sp: Float) {
         if (sp == fontSizeSp) return
@@ -318,14 +327,6 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
     // internal TextStyles.Mode names, kept for storage compatibility) instead of what
     // they actually render as read as wrong/confusing — there is no separate "big" or
     // "bubbly" look, just Cursive and Old English, same as the desktop always called them.
-    private fun styleLabel(mode: TextStyles.Mode): String = when (mode) {
-        TextStyles.Mode.PRO -> "PRO"
-        TextStyles.Mode.BUBBLY -> "✨ " + TextStyles.toCursive("Cursive")
-        TextStyles.Mode.CASUAL -> "☕ casual"
-        TextStyles.Mode.BOLD -> TextStyles.toBold("Bold")
-        TextStyles.Mode.BIG -> TextStyles.toOldEnglish("Old-E")
-    }
-
     private fun refreshStyleButtons() {
         val active = cachedMode
         for ((mode, btn) in styleButtons) {
@@ -488,14 +489,7 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
     private fun currentMode(): TextStyles.Mode = cachedMode
 
     private fun commitStyledChar(ch: String) {
-        val styled = when (currentMode()) {
-            TextStyles.Mode.BUBBLY -> TextStyles.toCursive(ch)
-            TextStyles.Mode.BOLD -> TextStyles.toBold(ch)
-            TextStyles.Mode.BIG -> TextStyles.toOldEnglish(ch)
-            TextStyles.Mode.CASUAL -> ch.lowercase()
-            TextStyles.Mode.PRO -> ch
-        }
-        service.typeCharacter(styled)
+        service.typeCharacter(styleChar(ch, currentMode()))
     }
 
     // ── Shared styling ───────────────────────────────────────────────────
@@ -531,4 +525,16 @@ class FloatingKeyboardOverlay(private val service: ControllerAccessibilityServic
         /** Reported live 2026-09-19: "can we make it smaller?" — down from 80. */
         private const val KEY_PX = 56
     }
+}
+
+/** Nudge math, extracted from FloatingKeyboardOverlay.nudgePosition. Clamps the panel
+ * inside the display, accounting for the panel's own size (the OCR-found bug was
+ * clamping to the raw screen edge without subtracting it). */
+internal fun clampNudgePosition(
+    x: Int, y: Int, dx: Int, dy: Int,
+    viewW: Int, viewH: Int, screenW: Int, screenH: Int
+): Pair<Int, Int> {
+    val maxX = (screenW - viewW).coerceAtLeast(0)
+    val maxY = (screenH - viewH).coerceAtLeast(0)
+    return (x + dx).coerceIn(0, maxX) to (y + dy).coerceIn(0, maxY)
 }
