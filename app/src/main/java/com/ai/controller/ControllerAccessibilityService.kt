@@ -66,11 +66,11 @@ class ControllerAccessibilityService : AccessibilityService() {
     private val inputMapper = InputMapper()
     private lateinit var profileManager: ProfileManager
     private lateinit var contextSwitcher: ContextSwitcher
-    private lateinit var cursorOverlay: CursorOverlay
-    private lateinit var legendOverlay: LegendOverlay
-    private lateinit var debugOverlay: DebugOverlay
-    private lateinit var keyboardOverlay: FloatingKeyboardOverlay
-    private var keyboardTypingTarget: AccessibilityNodeInfo? = null
+    internal lateinit var cursorOverlay: CursorOverlay
+    internal lateinit var legendOverlay: LegendOverlay
+    internal lateinit var debugOverlay: DebugOverlay
+    internal lateinit var keyboardOverlay: FloatingKeyboardOverlay
+    internal var keyboardTypingTarget: AccessibilityNodeInfo? = null
     // Not an AccessibilityNodeInfo reference: findEditableTarget() returns a NEW node
     // instance on every call (OCR-confirmed live 2026-09-20), so reference equality
     // between successive captures is worthless - it's true almost every time, even for
@@ -80,30 +80,30 @@ class ControllerAccessibilityService : AccessibilityService() {
     // node's window/package/view-id/on-screen position - stable across separate node
     // instances for the same underlying view, without depending on
     // AccessibilityNodeInfo's own unreliable equals().
-    private var lastFreshFocusIdentity: FieldIdentity? = null
+    internal var lastFreshFocusIdentity: FieldIdentity? = null
     private lateinit var voiceManager: VoiceManager
     private lateinit var windowManager: WindowManager
-    private var profile: ControllerProfile = ControllerProfile.default()
+    internal var profile: ControllerProfile = ControllerProfile.default()
     private val driftCalibrator = DriftCalibrator()
 
     private var motionCaptureView: MotionCaptureView? = null
-    private val activeTriggerJobs = mutableMapOf<ControllerInput, Job>()
-    private val triggerHeldState = mutableMapOf<ControllerInput, Boolean>()
+    internal val activeTriggerJobs = mutableMapOf<ControllerInput, Job>()
+    internal val triggerHeldState = mutableMapOf<ControllerInput, Boolean>()
     // Owner-based edge state for D-pad left/right caret movement — used by BOTH the
     // KeyEvent path (KEYCODE_DPAD_LEFT/RIGHT in handleKeyEventAction/onKeyEvent)
     // AND the HAT-axis path (AXIS_HAT_X in handleGenericMotion). Each mechanism
     // (KEY_EVENT or HAT) only ever sets/clears its own claim, eliminating the race
     // where KeyEvent UP could clear a flag that HAT still actively holds (or vice versa).
-    private enum class DpadCaretOwner { NONE, KEY_EVENT, HAT }
-    private var dpadCaretLeftOwner = DpadCaretOwner.NONE
-    private var dpadCaretRightOwner = DpadCaretOwner.NONE
+    internal enum class DpadCaretOwner { NONE, KEY_EVENT, HAT }
+    internal var dpadCaretLeftOwner = DpadCaretOwner.NONE
+    internal var dpadCaretRightOwner = DpadCaretOwner.NONE
     // Last known HAT-axis values from handleGenericMotion — retained for edge
     // detection. Initialized to NaN so the first motion event after service start
     // is never treated as a rising edge (comparisons with NaN are always false),
     // preventing a spurious moveCaret() if the D-pad is already held at startup.
-    private var lastHatX = Float.NaN
-    private var lastHatY = Float.NaN
-    private var lastStickScrollTimeMs = 0L
+    internal var lastHatX = Float.NaN
+    internal var lastHatY = Float.NaN
+    internal var lastStickScrollTimeMs = 0L
 
     // Lifecycle-scoped: every coroutine this service launches (trigger repeats,
     // legend tick, voice recording, the focus watchdog) is a child of this scope
@@ -114,7 +114,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     private var voiceBridgeServer: VoiceBridgeServer? = null
     private var legendTickJob: Job? = null
     private var focusWatchdogJob: Job? = null
-    private var backspaceHoldJob: Job? = null
+    internal var backspaceHoldJob: Job? = null
 
     // Idempotent guard: tracks the last KeyEvent (downTime, keyCode, action) handled
     // by either onKeyEvent (a11y filter) or handleCapturedKeyEvent (MotionCaptureView)
@@ -144,10 +144,10 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     // Push-to-talk state — A2: coroutine-driven recording with a sized AudioRecord
     // buffer and real cancellation, instead of a raw busy-read Thread.
-    private lateinit var pttController: PttController
-    @Volatile private var audioRecord: AudioRecord? = null
-    @Volatile private var voiceRecordJob: Job? = null
-    @Volatile private var isRecording = false
+    internal lateinit var pttController: PttController
+    @Volatile internal var audioRecord: AudioRecord? = null
+    @Volatile internal var voiceRecordJob: Job? = null
+    @Volatile internal var isRecording = false
     @Volatile private var voiceRecordCancelled = false
     @Volatile private var recordStartElapsedMs = 0L
 
@@ -159,17 +159,17 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun debugEnabled(): Boolean =
+    internal fun debugEnabled(): Boolean =
         getSharedPreferences(PROFILE_PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_DEBUG_ENABLED, false)
 
-    private fun applyDebugPref() {
+    internal fun applyDebugPref() {
         if (!::debugOverlay.isInitialized) return
         if (debugEnabled()) debugOverlay.show() else debugOverlay.hide()
     }
 
     /** Updates the floating debug readout when it's enabled; always logs regardless
      * (see individual Log.d calls) so toast suppression never hides input activity. */
-    private fun showDebug(text: String) {
+    internal fun showDebug(text: String) {
         if (::debugOverlay.isInitialized && debugOverlay.isShowing()) debugOverlay.update(text)
     }
 
@@ -242,12 +242,15 @@ class ControllerAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun teardown() {
+    internal fun teardown() {
         unregisterPrefsListener()
         cancelAllTriggerJobs()
         detachMotionCapture()
         hardStopVoiceRecording()
-        pttController.reset()
+        // Guarded like voiceManager below: onDestroy can run without a prior
+        // onServiceConnected (service created but never bound), and an
+        // unguarded lateinit access here would crash teardown.
+        if (::pttController.isInitialized) pttController.reset()
         voiceBridgeServer?.stop()
         voiceBridgeServer = null
         if (::voiceManager.isInitialized) voiceManager.shutdown()
@@ -306,7 +309,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * the event first wins, and the double-delivery risk is handled by the same
      * idempotent edges (PTT down/up, press-fired actions).
      */
-    private fun handleCapturedKeyEvent(event: KeyEvent): Boolean {
+    internal fun handleCapturedKeyEvent(event: KeyEvent): Boolean {
         val input = inputMapper.keyCodeToInput(event.keyCode) ?: return false
         if (event.repeatCount > 0) return true
 
@@ -384,7 +387,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         return true
     }
 
-    private fun handleButtonDown(input: ControllerInput, action: ButtonAction = inputMapper.resolveAction(profile, input)) {
+    internal fun handleButtonDown(input: ControllerInput, action: ButtonAction = inputMapper.resolveAction(profile, input)) {
         val cursor = cursorOverlay.getPosition()
 
         when (action.type) {
@@ -417,7 +420,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun handleKeyEventAction(action: ButtonAction) {
+    internal fun handleKeyEventAction(action: ButtonAction) {
         // AccessibilityService cannot inject arbitrary KeyEvents into another app without
         // system permission INJECT_EVENTS. For this standalone product, D-pad codes are
         // remapped to cursor nudges. F13-style "key" functionality is replaced by text
@@ -480,7 +483,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * currently showing" state to fight, just a window this service adds and
      * removes itself, on demand, every time.
      */
-    private fun startCustomKeyboard() {
+    internal fun startCustomKeyboard() {
         if (!keyboardOverlay.isShowing()) {
             keyboardTypingTarget = findEditableTarget()
             val target = keyboardTypingTarget
@@ -514,7 +517,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         val boundsInScreen: Rect
     )
 
-    private fun fieldIdentity(node: AccessibilityNodeInfo): FieldIdentity {
+    internal fun fieldIdentity(node: AccessibilityNodeInfo): FieldIdentity {
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
         return FieldIdentity(node.windowId, node.packageName, node.viewIdResourceName, bounds)
@@ -540,7 +543,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * actions at all. Only runs once per fresh keyboard-open on a genuinely new field (see
      * FieldIdentity above), so resuming a partially-typed field across keyboard toggles
      * doesn't keep wiping it. */
-    private fun clearOnFreshFocus(node: AccessibilityNodeInfo?) {
+    internal fun clearOnFreshFocus(node: AccessibilityNodeInfo?) {
         val target = node ?: return
         try {
             target.refresh()
@@ -564,7 +567,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * currently visible window regardless of which one holds focus, so picking the first
      * non-overlay window that isn't our own package reliably finds the real target.
      */
-    private fun externalAppRoot(): AccessibilityNodeInfo? = externalAppRoots().firstOrNull()
+    internal fun externalAppRoot(): AccessibilityNodeInfo? = externalAppRoots().firstOrNull()
 
     /**
      * Every window that could hold the field being typed into, best candidate first.
@@ -575,7 +578,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * window the user is actually interacting with (active, then focused), and the
      * callers fall through the list until a field is actually found.
      */
-    private fun externalAppRoots(): List<AccessibilityNodeInfo> {
+    internal fun externalAppRoots(): List<AccessibilityNodeInfo> {
         val infos = windows ?: return emptyList()
         // Pair each window with its root in one pass: the old filter called
         // it.root twice, leaking a node per call, and never recycled the
@@ -604,7 +607,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     /** First focused editable field across the candidate windows, falling back to the
      * first editable field found at all — some apps expose an editable node without ever
      * marking it input-focused, which is the other half of "doesn't print on every box." */
-    private fun findEditableTarget(): AccessibilityNodeInfo? {
+    internal fun findEditableTarget(): AccessibilityNodeInfo? {
         val roots = externalAppRoots()
         var result: AccessibilityNodeInfo? = null
         var resultRoot: AccessibilityNodeInfo? = null
@@ -632,7 +635,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         return result
     }
 
-    private fun firstEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    internal fun firstEditableNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         if (node.isEditable && node.isVisibleToUser) return node
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
@@ -654,13 +657,13 @@ class ControllerAccessibilityService : AccessibilityService() {
     /** Logs and returns null when there's no focused field, so a text action that does
      * nothing says why instead of returning silently — the failure mode that hid the
      * backspace/delete/enter breakage reported 2026-09-18. */
-    private fun typingTargetOrWarn(op: String): AccessibilityNodeInfo? {
+    internal fun typingTargetOrWarn(op: String): AccessibilityNodeInfo? {
         val t = typingTarget()
         if (t == null) Log.w(TAG, "$op: no focused text field (nothing to act on)")
         return t
     }
 
-    private fun typingTarget(): AccessibilityNodeInfo? =
+    internal fun typingTarget(): AccessibilityNodeInfo? =
         if (::keyboardOverlay.isInitialized && keyboardOverlay.isShowing()) {
             // Root cause of "only the last letter of a sentence survives," found live
             // 2026-09-18: this node is captured once when the keyboard opens and reused
@@ -674,7 +677,7 @@ class ControllerAccessibilityService : AccessibilityService() {
             findEditableTarget()
         }
 
-    private fun moveAccessibilityFocus(forward: Boolean) {
+    internal fun moveAccessibilityFocus(forward: Boolean) {
         typingTarget()?.let { focused ->
             val direction = if (forward) 2 else 1
             val next = focused.focusSearch(direction)
@@ -686,14 +689,14 @@ class ControllerAccessibilityService : AccessibilityService() {
     // Profile contexts (desktop / browser / iptv) — ContextSwitcher
     // ---------------------------------------------------------------------
 
-    private fun cycleContext() {
+    internal fun cycleContext() {
         val next = contextSwitcher.cycleContext()
         reloadActiveProfile()
         Toast.makeText(applicationContext, "Context: ${next.replaceFirstChar { it.uppercase() }}", Toast.LENGTH_SHORT).show()
         voiceManager.speak("${next} mode")
     }
 
-    private fun reloadActiveProfile() {
+    internal fun reloadActiveProfile() {
         cancelAllTriggerJobs()
         backspaceHoldJob?.cancel()
         backspaceHoldJob = null
@@ -720,9 +723,9 @@ class ControllerAccessibilityService : AccessibilityService() {
     // ---------------------------------------------------------------------
 
     /** A4: gate every path into Groq behind explicit, persisted user consent. */
-    private fun consentGranted(): Boolean = ConsentManager.isGranted(this)
+    internal fun consentGranted(): Boolean = ConsentManager.isGranted(this)
 
-    private fun startVoiceRecording() {
+    internal fun startVoiceRecording() {
         if (isRecording) return // debounce reentry; PttController already guards this too
         if (!consentGranted()) {
             Toast.makeText(
@@ -821,7 +824,7 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     /** [cancel]=true is the PTT-release-into-cancel / long-press-timeout path: the
      * Job is cancelled outright (A2) so no STT call and no text ever lands. */
-    private fun stopVoiceRecording(cancel: Boolean) {
+    internal fun stopVoiceRecording(cancel: Boolean) {
         if (!isRecording && voiceRecordJob?.isActive != true) return
         voiceRecordCancelled = cancel
         isRecording = false // signals the read loop to exit its while-condition normally
@@ -838,7 +841,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     /** Used only from teardown: unconditionally drop any in-flight recording. */
-    private fun hardStopVoiceRecording() {
+    internal fun hardStopVoiceRecording() {
         isRecording = false
         voiceRecordCancelled = true
         voiceRecordJob?.cancel()
@@ -848,7 +851,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         try { audioRecord?.stop() } catch (e: IllegalStateException) { /* not recording */ }
     }
 
-    private suspend fun processRecording(pcmBytes: ByteArray, sampleRate: Int) {
+    internal suspend fun processRecording(pcmBytes: ByteArray, sampleRate: Int) {
         val wavFile = writeWavToCache(pcmBytes, sampleRate)
         try {
             val rawTranscript = transcribeWithGroq(wavFile)
@@ -866,7 +869,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     }
 
     /** Used by [VoiceBridgeServer]'s /voice route — same consent gate as the PTT path. */
-    private suspend fun transcribeBytesIfConsented(wavBytes: ByteArray): String {
+    internal suspend fun transcribeBytesIfConsented(wavBytes: ByteArray): String {
         if (!consentGranted()) return ""
         val tmp = File(cacheDir, "bridge_voice_${System.currentTimeMillis()}.wav")
         return try {
@@ -880,7 +883,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun showVoiceToast(recording: Boolean) {
+    internal fun showVoiceToast(recording: Boolean) {
         val text = if (recording) "Listening..." else "Processing voice..."
         Toast.makeText(applicationContext, text, Toast.LENGTH_SHORT).show()
         showDebug("Voice: ${if (recording) "recording" else "processing"}\nPTT: ${if (pttController.isHeld) "HELD" else "idle"}")
@@ -900,7 +903,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         pttController.onButtonUp()
     }
 
-    private fun writeWavToCache(pcmBytes: ByteArray, sampleRate: Int): File {
+    internal fun writeWavToCache(pcmBytes: ByteArray, sampleRate: Int): File {
         // Unique per recording: two rapid PTT takes ran processRecording concurrently
         // and both wrote/read/deleted the SHARED voice_prompt.wav — the loser hit
         // ENOENT (the exact "Voice transcription failed" stack). Unique names kill the race.
@@ -986,7 +989,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     private fun caretRange(node: AccessibilityNodeInfo, current: String): Pair<Int, Int> =
         selectionRange(node.textSelectionStart, node.textSelectionEnd, current.length)
 
-    private fun injectText(text: String) {
+    internal fun injectText(text: String) {
         try {
             val focused = typingTarget()
                 ?: externalAppRoot()?.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
@@ -1060,7 +1063,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * B/Bksp, X/Del and RS/Enter slots (ActionType.TEXT_EDIT). Uses the same
      * findFocus + SET_TEXT path as KeyboardActivity so no extra permissions are needed.
      */
-    private fun handleTextEditAction(action: ButtonAction) {
+    internal fun handleTextEditAction(action: ButtonAction) {
         when (action.textOp) {
             TextEditOp.BACKSPACE -> backspaceOnce()
             TextEditOp.DELETE_NEXT -> deleteNextOnce()
@@ -1113,7 +1116,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * sees the new position. Reported live 2026-09-19: "left and right moves the mouse
      * cursor and not the caret for typing dictation" — there was previously no way to move
      * the caret at all. */
-    private fun moveCaret(delta: Int) {
+    internal fun moveCaret(delta: Int) {
         try {
             val focused = typingTargetOrWarn("moveCaret") ?: return
             val current = focused.text?.toString().orEmpty()
@@ -1135,7 +1138,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     /** Starts the hold-timer for B/Bksp only; every other action already fired in full on
      * ACTION_DOWN and has nothing to do on a hold. Reported live 2026-09-19: "I have to
      * press B, I can't hold it to delete a whole line." */
-    private fun armBackspaceHold(action: ButtonAction) {
+    internal fun armBackspaceHold(action: ButtonAction) {
         if (action.type != ActionType.TEXT_EDIT || action.textOp != TextEditOp.BACKSPACE) return
         backspaceHoldJob?.cancel()
         backspaceHoldJob = serviceScope.launch {
@@ -1144,7 +1147,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun disarmBackspaceHold() {
+    internal fun disarmBackspaceHold() {
         backspaceHoldJob?.cancel()
         backspaceHoldJob = null
     }
@@ -1154,7 +1157,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * For the common single-line field (no '\n' at all) this clears everything from the
      * start of the field up to the caret — with no prior caret movement, that's the whole
      * field, matching what was asked for. */
-    private fun deleteToLineStart() {
+    internal fun deleteToLineStart() {
         try {
             val focused = typingTargetOrWarn("deleteToLineStart") ?: return
             val current = focused.text?.toString().orEmpty()
@@ -1168,7 +1171,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun injectFocusedText(node: AccessibilityNodeInfo, text: String) {
+    internal fun injectFocusedText(node: AccessibilityNodeInfo, text: String) {
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
         val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         if (!success) {
@@ -1210,7 +1213,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     // Sticks + triggers (joystick motion, captured via a focused overlay)
     // ---------------------------------------------------------------------
 
-    private fun attachMotionCapture() {
+    internal fun attachMotionCapture() {
         val view = MotionCaptureView(
             this,
             onMotion = { event -> handleGenericMotion(event) },
@@ -1232,7 +1235,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun detachMotionCapture() {
+    internal fun detachMotionCapture() {
         motionCaptureView?.let {
             try {
                 windowManager.removeView(it)
@@ -1257,7 +1260,7 @@ class ControllerAccessibilityService : AccessibilityService() {
      * below re-request focus the moment it's lost, so joystick capture
      * self-heals instead of going quietly dead.
      */
-    private fun startFocusWatchdog() {
+    internal fun startFocusWatchdog() {
         focusWatchdogJob = serviceScope.launch {
             while (isActive) {
                 // hasWindowFocus(), not isFocused — see onAccessibilityEvent above for why.
@@ -1275,7 +1278,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startLegendTick() {
+    internal fun startLegendTick() {
         legendTickJob = serviceScope.launch {
             while (isActive) {
                 if (::legendOverlay.isInitialized && legendOverlay.isShowing() && ::cursorOverlay.isInitialized) {
@@ -1286,7 +1289,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun handleGenericMotion(event: MotionEvent): Boolean {
+    internal fun handleGenericMotion(event: MotionEvent): Boolean {
         if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) return false
         Log.d(TAG, "onGenericMotionEvent source=${event.source} profile=${profile.name}")
 
@@ -1377,7 +1380,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         return true
     }
 
-    private fun maybeDispatchStickScroll(sy: Float) {
+    internal fun maybeDispatchStickScroll(sy: Float) {
         val now = SystemClock.uptimeMillis()
         if (now - lastStickScrollTimeMs < STICK_SCROLL_COOLDOWN_MS) return
         lastStickScrollTimeMs = now
@@ -1388,7 +1391,7 @@ class ControllerAccessibilityService : AccessibilityService() {
     /** Analog triggers have no discrete KeyEvent up/down — this derives rising/falling
      * edges from the continuous axis value so VOICE_TRIGGER (PttController) and
      * SCROLL (repeat job) both get proper press/release semantics. */
-    private fun handleTrigger(input: ControllerInput, value: Float) {
+    internal fun handleTrigger(input: ControllerInput, value: Float) {
         val wasActive = triggerHeldState[input] ?: false
         val active = inputMapper.isTriggerActive(value, wasActive)
         if (active == wasActive) return
@@ -1419,7 +1422,7 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun startTriggerRepeat(input: ControllerInput, action: ButtonAction) {
+    internal fun startTriggerRepeat(input: ControllerInput, action: ButtonAction) {
         if (activeTriggerJobs.containsKey(input)) return
         // Child of serviceScope, not a Handler.postDelayed chain — cancelled
         // uniformly by serviceScope.cancel() in teardown() (A5).
@@ -1432,11 +1435,11 @@ class ControllerAccessibilityService : AccessibilityService() {
         activeTriggerJobs[input] = job
     }
 
-    private fun stopTriggerRepeat(input: ControllerInput) {
+    internal fun stopTriggerRepeat(input: ControllerInput) {
         activeTriggerJobs.remove(input)?.cancel()
     }
 
-    private fun cancelAllTriggerJobs() {
+    internal fun cancelAllTriggerJobs() {
         activeTriggerJobs.values.forEach { it.cancel() }
         activeTriggerJobs.clear()
         triggerHeldState.clear()
@@ -1460,24 +1463,24 @@ class ControllerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun dispatchTap(point: PointF) {
+    internal fun dispatchTap(point: PointF) {
         val path = Path().apply { moveTo(point.x, point.y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS)
         val dispatched = dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), tapResultCallback, null)
         Log.d(TAG, "dispatchTap at (${point.x}, ${point.y}): dispatchGesture() accepted=$dispatched")
     }
 
-    private fun dispatchLongPress(point: PointF, durationMs: Long) {
+    internal fun dispatchLongPress(point: PointF, durationMs: Long) {
         val path = Path().apply { moveTo(point.x, point.y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, durationMs.coerceAtLeast(MIN_LONG_PRESS_MS))
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
-    private fun dispatchScroll(origin: PointF, direction: SwipeDirection) {
+    internal fun dispatchScroll(origin: PointF, direction: SwipeDirection) {
         dispatchSwipe(origin, direction, SCROLL_DURATION_MS, SCROLL_DISTANCE_PX)
     }
 
-    private fun dispatchSwipe(
+    internal fun dispatchSwipe(
         origin: PointF,
         direction: SwipeDirection,
         durationMs: Long,
@@ -1498,12 +1501,12 @@ class ControllerAccessibilityService : AccessibilityService() {
     // Preference change → live profile reload
     // ---------------------------------------------------------------------
 
-    private fun registerPrefsListener() {
+    internal fun registerPrefsListener() {
         getSharedPreferences(PROFILE_PREFS_NAME, MODE_PRIVATE)
             .registerOnSharedPreferenceChangeListener(prefsListener)
     }
 
-    private fun unregisterPrefsListener() {
+    internal fun unregisterPrefsListener() {
         getSharedPreferences(PROFILE_PREFS_NAME, MODE_PRIVATE)
             .unregisterOnSharedPreferenceChangeListener(prefsListener)
     }
@@ -1549,7 +1552,7 @@ class ControllerAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "AIControllerService"
-        private const val PROFILE_PREFS_NAME = "ai_controller_prefs"
+        internal const val PROFILE_PREFS_NAME = "ai_controller_prefs"
         const val KEY_DEBUG_ENABLED = "debug_overlay_enabled"
 
         private const val CURSOR_SPEED_PX = 24f
