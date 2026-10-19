@@ -220,4 +220,10 @@ class TextStylesTest {
         assertEquals(18f, KeyboardFontSizeStore.smaller(20f))
         assertEquals(14f, KeyboardFontSizeStore.smaller(14f))
     }
+
+    @Test fun `transform BIG renders old english`() {
+        val out = TextStyles.transform("Hi", TextStyles.Mode.BIG)
+        assertTrue(out.isNotBlank())
+        assertNotEquals("Hi", out)
+    }
 }

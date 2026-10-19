@@ -70,4 +70,17 @@ class ButtonActionTest {
         assertEquals(ButtonAction.tap("Click"), ButtonAction.tap("Click"))
         assertNotEquals(ButtonAction.tap("Click"), ButtonAction.tap("Tap"))
     }
+
+    @Test
+    fun `home factory`() {
+        val a = ButtonAction.home()
+        assertEquals(ActionType.HOME, a.type)
+    }
+
+    @Test
+    fun `cycleContext factory`() {
+        val a = ButtonAction.cycleContext("ctx")
+        assertEquals(ActionType.CYCLE_CONTEXT, a.type)
+        assertEquals("ctx", a.label)
+    }
 }

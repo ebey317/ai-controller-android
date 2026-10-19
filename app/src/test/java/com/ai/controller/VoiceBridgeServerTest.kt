@@ -9,6 +9,8 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.io.IOException
+import kotlinx.coroutines.Job
 
 /**
  * Tests for VoiceBridgeServer: the loopback HTTP routes end to end over real
@@ -248,5 +250,54 @@ class VoiceBridgeServerTest {
         assertTrue(text.contains("Content-Type: application/json\r\n"))
         assertTrue(text.contains("Content-Length: 7\r\n"))
         assertTrue(text.endsWith("\r\n\r\n{\"a\":1}"))
+    }
+
+    @Test
+    fun `start with an out-of-range port hits the generic server-loop catch`() {
+        val server = VoiceBridgeServer({ "ok" }, {})
+        // ServerSocket(99999) throws IllegalArgumentException (not a
+        // SocketException), exercising the generic catch in the accept loop.
+        server.start(99999)
+        val jobField = VoiceBridgeServer::class.java.getDeclaredField("job").apply {
+            isAccessible = true
+        }
+        val deadline = System.currentTimeMillis() + 10000
+        var done = false
+        while (System.currentTimeMillis() < deadline) {
+            val job = jobField.get(server) as Job?
+            if (job?.isCompleted == true) {
+                done = true
+                break
+            }
+            Thread.sleep(50)
+        }
+        assertTrue("server loop should finish after the bind failure", done)
+        server.stop()
+    }
+
+    @Test
+    fun `stop tolerates a server socket that throws on close`() {
+        val server = VoiceBridgeServer({ "ok" }, {})
+        val field = VoiceBridgeServer::class.java.getDeclaredField("serverSocket").apply {
+            isAccessible = true
+        }
+        field.set(server, object : ServerSocket() {
+            override fun close(): Unit = throw IOException("boom")
+        })
+        server.stop() // must not throw
+        assertNull(field.get(server))
+    }
+
+    @Test
+    fun `a throwing transcribe lambda is caught and the server stays up`() {
+        val (server, port) = startedServer(onTranscribe = { _: ByteArray -> throw RuntimeException("boom") })
+        try {
+            val bad = rawRequest(port, post("/voice", server.authToken, "abc"))
+            assertEquals("", bad) // handler threw before writing any response
+            val ok = rawRequest(port, post("/speak", server.authToken, "hi"))
+            assertEquals("HTTP/1.1 200 OK", statusLine(ok))
+        } finally {
+            server.stop()
+        }
     }
 }

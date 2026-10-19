@@ -273,4 +273,45 @@ class ServiceHelpersTest {
         service.moveAccessibilityFocus(true)
         service.moveAccessibilityFocus(false)
     }
+
+    @Test
+    fun `externalAppRoots sorts multiple windows through the comparator chain`() {
+        val w1 = windowWithRoot("com.a.app")
+        val w2 = windowWithRoot("com.b.app")
+        shadow.setWindows(listOf(w1, w2))
+        val roots = service.externalAppRoots()
+        assertEquals(2, roots.size)
+    }
+
+    @Test
+    fun `firstEditableNode descends into children`() {
+        val parent = sealedTestRoot("com.p.app")
+        val child = sealedTestRoot("com.p.app", editable = true)
+        // addChild(AccessibilityNodeInfo) is gone from the API 34 compile
+        // stubs; the Robolectric shadow still exposes it for tests.
+        val parentShadow = org.robolectric.Shadows.shadowOf(parent)
+            as org.robolectric.shadows.ShadowAccessibilityNodeInfo
+        parentShadow.addChild(child)
+        val found = service.firstEditableNode(parent)
+        assertNotNull(found)
+        assertTrue(found!!.isEditable)
+    }
+
+    @Test
+    fun `findEditableTarget uses the input-focused node when present`() {
+        // findFocus returns the node itself so findEditableTarget takes the
+        // input-focus branch without any node recycling.
+        val parent = object : android.view.accessibility.AccessibilityNodeInfo() {
+            override fun findFocus(focus: Int): android.view.accessibility.AccessibilityNodeInfo? = this
+        }
+        parent.packageName = "com.f.app"
+        parent.isVisibleToUser = true
+        val info = android.view.accessibility.AccessibilityWindowInfo.obtain()
+        val winShadow = org.robolectric.Shadows.shadowOf(info) as SealedRootWindowInfoShadow
+        SealedRootWindowInfoShadow.setFactory(winShadow) { parent }
+        shadow.setWindows(listOf(info))
+        val target = service.findEditableTarget()
+        assertNotNull(target)
+        assertEquals("com.f.app", target!!.packageName)
+    }
 }

@@ -103,4 +103,18 @@ class ProfileSerializerTest {
         assertEquals(ActionType.NONE, restored.mappings[ControllerInput.BUTTON_A]!!.type)
         assertEquals(ControllerInput.values().size, restored.mappings.size)
     }
+
+    @Test
+    fun `swipeDirection deserializes when present`() {
+        val root = ProfileSerializer.serialize(ControllerProfile.default())
+        val mappings = root.getJSONObject("mappings")
+        val aAction = mappings.getJSONObject(ControllerInput.BUTTON_A.name)
+        aAction.put("type", "SWIPE")
+        aAction.put("swipeDirection", "UP")
+        val restored = ProfileSerializer.deserialize(root)
+        assertEquals(
+            com.ai.controller.models.SwipeDirection.UP,
+            restored.mappings[ControllerInput.BUTTON_A]!!.swipeDirection
+        )
+    }
 }
