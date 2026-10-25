@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AI Controller</string>
+    <string name="app_tagline">Gamepad &amp; voice input</string>
     <string name="settings_title">Button Mappings</string>
     <string name="accessibility_service_label">AI Controller Input Mapper</string>
     <string name="accessibility_service_description">Lets you control this device with an Xbox controller instead of a touchscreen or keyboard, for users who have difficulty using standard touch input. Controller buttons, sticks, and triggers are translated into taps, gestures, and navigation.</string>
@@ -18,6 +19,11 @@
     <string name="label_skin_tone">Emoji skin tone</string>
     <string name="label_theme">Theme</string>
     <string name="label_debug_toggle">Debug overlay</string>
+    <string name="section_controller">Controller</string>
+    <string name="section_voice">Voice dictation</string>
+    <string name="section_cursor">Cursor &amp; input</string>
+    <string name="section_appearance">Appearance</string>
+    <string name="section_advanced">Advanced</string>
 
     <string name="action_open_button_mappings">Edit Button Mappings</string>
     <string name="action_reset_defaults">Reset to Defaults</string>
