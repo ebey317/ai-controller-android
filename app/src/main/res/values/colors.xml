@@ -19,4 +19,11 @@
     <color name="hc_accent">#FFFF00</color>
     <color name="hc_text_primary">#FFFF00</color>
     <color name="hc_text_secondary">#FFFFFF</color>
+
+    <!-- Green-on-black brand palette (Master AI signature) -->
+    <color name="gb_background">#000000</color>
+    <color name="gb_surface">#0f1f0f</color>
+    <color name="gb_accent">#00E5A0</color>
+    <color name="gb_text">#e8e8e8</color>
+    <color name="gb_text_secondary">#6a8a6a</color>
 </resources>

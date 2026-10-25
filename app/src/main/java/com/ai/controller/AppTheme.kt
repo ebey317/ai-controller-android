@@ -16,7 +16,8 @@ enum class AppTheme(val label: String, val nightMode: Int) {
     SYSTEM("System default", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM),
     LIGHT("Light", AppCompatDelegate.MODE_NIGHT_NO),
     DARK("Dark", AppCompatDelegate.MODE_NIGHT_YES),
-    HIGH_CONTRAST("High contrast", AppCompatDelegate.MODE_NIGHT_YES);
+    HIGH_CONTRAST("High contrast", AppCompatDelegate.MODE_NIGHT_YES),
+    GREEN_ON_BLACK("Green on black", AppCompatDelegate.MODE_NIGHT_YES);
 
     companion object {
         fun from(name: String?): AppTheme =
@@ -54,8 +55,10 @@ object ThemeStore {
 object ThemeManager {
     fun apply(activity: AppCompatActivity) {
         val theme = ThemeStore.load(activity)
-        if (theme == AppTheme.HIGH_CONTRAST) {
-            activity.setTheme(R.style.Theme_AIController_HighContrast)
+        when (theme) {
+            AppTheme.HIGH_CONTRAST -> activity.setTheme(R.style.Theme_AIController_HighContrast)
+            AppTheme.GREEN_ON_BLACK -> activity.setTheme(R.style.Theme_AIController_GreenOnBlack)
+            else -> Unit
         }
         AppCompatDelegate.setDefaultNightMode(theme.nightMode)
     }

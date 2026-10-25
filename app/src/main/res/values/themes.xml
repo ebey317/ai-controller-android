@@ -19,4 +19,15 @@
         <item name="android:textColorPrimary">@color/hc_text_primary</item>
         <item name="android:textColorSecondary">@color/hc_text_secondary</item>
     </style>
+
+    <!-- Green-on-black brand variant (Master AI signature). Applied at runtime
+         via ThemeManager for AppTheme.GREEN_ON_BLACK. -->
+    <style name="Theme.AIController.GreenOnBlack" parent="Theme.AIController">
+        <item name="colorPrimary">@color/gb_accent</item>
+        <item name="colorPrimaryDark">@color/gb_accent</item>
+        <item name="colorAccent">@color/gb_accent</item>
+        <item name="android:windowBackground">@color/gb_background</item>
+        <item name="android:textColorPrimary">@color/gb_text</item>
+        <item name="android:textColorSecondary">@color/gb_text_secondary</item>
+    </style>
 </resources>
