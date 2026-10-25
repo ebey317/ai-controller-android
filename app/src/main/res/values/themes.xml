@@ -8,4 +8,15 @@
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
     </style>
+
+    <!-- High-contrast variant: black background, yellow foreground. Applied at
+         runtime via ThemeManager for AppTheme.HIGH_CONTRAST. -->
+    <style name="Theme.AIController.HighContrast" parent="Theme.AIController">
+        <item name="colorPrimary">@color/hc_primary</item>
+        <item name="colorPrimaryDark">@color/hc_primary</item>
+        <item name="colorAccent">@color/hc_accent</item>
+        <item name="android:windowBackground">@color/hc_background</item>
+        <item name="android:textColorPrimary">@color/hc_text_primary</item>
+        <item name="android:textColorSecondary">@color/hc_text_secondary</item>
+    </style>
 </resources>

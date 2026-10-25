@@ -7,6 +7,7 @@ import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.ai.controller.ProfileManager
 import com.ai.controller.R
+import com.ai.controller.ThemeManager
 import com.ai.controller.databinding.ActivitySettingsBinding
 import com.ai.controller.models.ActionType
 import com.ai.controller.models.ButtonAction
@@ -28,6 +29,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var adapter: ButtonMappingAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        ThemeManager.apply(this)
         super.onCreate(savedInstanceState)
         binding = ActivitySettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)

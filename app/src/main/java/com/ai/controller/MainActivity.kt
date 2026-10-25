@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var profile: com.ai.controller.models.ControllerProfile
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        ThemeManager.apply(this)
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -112,6 +113,26 @@ class MainActivity : AppCompatActivity() {
                 val tone = EmojiSkinTone.entries[pos]
                 SkinToneStore.save(this@MainActivity, tone)
                 TextStyles.setSkinTone(tone)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>) = Unit
+        }
+
+        // App theme — System/Light/Dark/High-contrast. Saving + recreate() re-runs
+        // onCreate, which calls ThemeManager.apply (setTheme for high-contrast +
+        // setDefaultNightMode for the rest). Guarded so the initial setSelection
+        // (which already matches the stored value) never triggers a spurious recreate.
+        binding.spinnerTheme.adapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_dropdown_item,
+            AppTheme.entries.map { it.label }
+        )
+        binding.spinnerTheme.setSelection(AppTheme.entries.indexOf(ThemeStore.load(this)))
+        binding.spinnerTheme.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>, view: View?, pos: Int, id: Long) {
+                val theme = AppTheme.entries[pos]
+                if (theme != ThemeStore.load(this@MainActivity)) {
+                    ThemeStore.save(this@MainActivity, theme)
+                    recreate()
+                }
             }
             override fun onNothingSelected(parent: AdapterView<*>) = Unit
         }

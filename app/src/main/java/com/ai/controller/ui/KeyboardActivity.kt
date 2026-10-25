@@ -16,6 +16,7 @@ import com.ai.controller.PinStore
 import com.ai.controller.PttModeStore
 import com.ai.controller.R
 import com.ai.controller.TextStyles
+import com.ai.controller.ThemeManager
 import org.json.JSONObject
 
 /**
@@ -48,6 +49,7 @@ class KeyboardActivity : AppCompatActivity() {
     private val punctuationRow = listOf(",", ".", "?", "!", "'", "-", "/", ":", ";", "@")
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        ThemeManager.apply(this)
         super.onCreate(savedInstanceState)
         title = getString(R.string.keyboard_title)
         cachedMode = PttModeStore.load(this)
